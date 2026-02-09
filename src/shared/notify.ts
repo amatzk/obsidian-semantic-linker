@@ -18,6 +18,10 @@ export const logger = {
         console.warn(`[${PREFIX}] ${msg}`);
     },
 
+    warnLog: (msg: string, detail?: unknown) => {
+        console.warn(`[${PREFIX}] ${msg}`, detail ?? '');
+    },
+
     error: (msg: string, detail?: unknown, sticky = true, timeout = 6000) => {
         logger._notify(msg, true, sticky ? 0 : timeout);
         console.error(`[${PREFIX}] ${msg}`, detail ?? '');

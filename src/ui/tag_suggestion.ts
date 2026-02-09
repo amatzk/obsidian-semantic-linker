@@ -1,27 +1,55 @@
 import type MainPlugin from 'main';
 import { AbstractInputSuggest, type App } from 'obsidian';
 
+const SEPARATOR_REGEX = /[,\s]+/;
+const SEPARATOR_CAPTURE_REGEX = /([,\s]+)/;
+
+const extractLastWord = (text: string, cursorPosition: number): string => {
+    const textBeforeCursor = text.substring(0, cursorPosition);
+    const parts = textBeforeCursor.split(SEPARATOR_REGEX);
+    const lastPartRaw = parts[parts.length - 1] ?? '';
+    return lastPartRaw.replace(/^#/, '').toLowerCase();
+};
+
+const replaceLastWord = (
+    fullText: string,
+    cursorPosition: number,
+    replacement: string,
+): string => {
+    const textBeforeCursor = fullText.substring(0, cursorPosition);
+    const textAfterCursor = fullText.substring(cursorPosition);
+
+    const parts = textBeforeCursor.split(SEPARATOR_CAPTURE_REGEX);
+
+    if (parts.length > 0) {
+        parts[parts.length - 1] = replacement;
+    } else {
+        parts.push(replacement);
+    }
+
+    return parts.join('') + textAfterCursor;
+};
+
 export class TagSuggest extends AbstractInputSuggest<string> {
     constructor(
         app: App,
-        private inputEl: HTMLInputElement,
-        private plugin: MainPlugin,
+        private readonly inputEl: HTMLInputElement,
+        private readonly plugin: MainPlugin,
     ) {
         super(app, inputEl);
     }
 
     getSuggestions(inputStr: string): string[] {
         const cursorPosition = this.inputEl.selectionStart || 0;
-        const textBeforeCursor = inputStr.substring(0, cursorPosition);
+        const lastPart = extractLastWord(inputStr, cursorPosition);
 
-        const parts = textBeforeCursor.split(/[,\s]+/);
-        const lastPartRaw = parts[parts.length - 1] ?? '';
-        const lastPart = lastPartRaw.replace(/^#/, '').toLowerCase();
+        const tagManager = this.plugin.tagManager;
+        if (!tagManager) return [];
 
-        const tags = Array.from(this.plugin.tagManager.getGlobalTags());
+        const tags = Array.from(tagManager.getGlobalTags());
 
         return tags
-            .filter((tag) => tag.toLowerCase().contains(lastPart))
+            .filter((tag) => tag.toLowerCase().includes(lastPart))
             .sort();
     }
 
@@ -33,17 +61,7 @@ export class TagSuggest extends AbstractInputSuggest<string> {
         const fullValue = this.inputEl.value;
         const cursorPosition = this.inputEl.selectionStart || 0;
 
-        const textBeforeCursor = fullValue.substring(0, cursorPosition);
-        const textAfterCursor = fullValue.substring(cursorPosition);
-
-        const parts = textBeforeCursor.split(/([,\s]+)/);
-        if (parts.length > 0) {
-            parts[parts.length - 1] = tag;
-        } else {
-            parts.push(tag);
-        }
-
-        const newValue = parts.join('') + textAfterCursor;
+        const newValue = replaceLastWord(fullValue, cursorPosition, tag);
 
         this.inputEl.value = newValue;
         this.inputEl.trigger('input');

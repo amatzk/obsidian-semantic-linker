@@ -1,11 +1,20 @@
 import { createStorageProvider } from 'logic/storage';
+import { logger } from 'shared/notify';
 import { DB_VERSION } from '../constants';
 
 export type IndexStatus = {
-    lastIndexTime: number;
-    lastIndexCount: number;
-    lastModelUsed: string;
-    modelContextLength?: number;
+    readonly lastIndexTime: number;
+    readonly lastIndexCount: number;
+    readonly lastModelUsed: string;
+    readonly modelContextLength?: number;
+};
+
+type StatusRecord = IndexStatus & { readonly id: string };
+
+export type StatusService = {
+    readonly getState: () => IndexStatus;
+    readonly update: (update: Partial<IndexStatus>) => Promise<void>;
+    readonly load: () => Promise<IndexStatus>;
 };
 
 const STATUS_ID = 'current-status';
@@ -17,56 +26,51 @@ const DEFAULT_STATUS: IndexStatus = {
     modelContextLength: 512,
 };
 
-type StatusRecord = IndexStatus & { id: string };
-
-export type StatusService = {
-    readonly getState: () => IndexStatus;
-    readonly update: (update: Partial<IndexStatus>) => Promise<void>;
-    readonly load: () => Promise<IndexStatus>;
-};
-
 export const createStatusStoreService = (
     dbName: string,
     onUpdate?: () => void,
 ): StatusService => {
     const provider = createStorageProvider({
-        dbName: dbName,
+        dbName,
         storeName: 'status',
         version: DB_VERSION,
         keyPath: 'id',
     });
 
-    let _state: IndexStatus = { ...DEFAULT_STATUS };
+    let cachedState: IndexStatus = { ...DEFAULT_STATUS };
 
     return {
-        getState: () => ({ ..._state }),
+        getState: () => ({ ...cachedState }),
 
-        async load(): Promise<IndexStatus> {
+        load: async () => {
             try {
                 const result = await provider.getByKey<StatusRecord>(STATUS_ID);
                 if (result) {
                     const { id, ...savedStatus } = result;
-                    _state = { ...DEFAULT_STATUS, ...savedStatus };
+                    cachedState = { ...DEFAULT_STATUS, ...savedStatus };
                 }
-            } catch (e) {
-                console.error('Failed to load status from DB:', e);
+            } catch (error) {
+                logger.warnLog('Failed to load status from DB:', error);
             }
+
             onUpdate?.();
-            return _state;
+            return { ...cachedState };
         },
 
-        async update(update: Partial<IndexStatus>): Promise<void> {
-            _state = {
-                ..._state,
-                ...update,
+        update: async (changes) => {
+            cachedState = {
+                ...cachedState,
+                ...changes,
             };
+
             try {
                 await provider.putBatch<StatusRecord>([
-                    { ..._state, id: STATUS_ID },
+                    { ...cachedState, id: STATUS_ID },
                 ]);
-            } catch (e) {
-                console.error('Failed to save status to DB:', e);
+            } catch (error) {
+                logger.warnLog('Failed to save status to DB:', error);
             }
+
             onUpdate?.();
         },
     };

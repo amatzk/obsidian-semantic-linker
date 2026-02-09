@@ -38,7 +38,7 @@ import { SemanticLinkerSettingTab } from './ui/settings_tab';
 import { SimilarNotesView } from './ui/similar_notes_view';
 
 export default class MainPlugin extends Plugin {
-    settings!: SettingParams;
+    settings: SettingParams = DEFAULT_SETTINGS;
     ollamaService!: OllamaService;
     statusService!: StatusService;
     tagManager!: TagManager;
@@ -59,7 +59,9 @@ export default class MainPlugin extends Plugin {
         }
         const vaultHash = await getVaultHash(vaultIdentifier);
         const fullDbName = `${DB_PREFIX}/${vaultHash}`;
+
         await this.initState(fullDbName);
+
         this.registerView(
             VIEW_TYPE_SEMANTIC_LINKER,
             (leaf: WorkspaceLeaf) => new SimilarNotesView(leaf, this),
@@ -81,7 +83,14 @@ export default class MainPlugin extends Plugin {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData ?? {});
 
         this.ollamaService = createOllamaService(this.settings.ollamaUrl);
-        void this.ollamaService.fetchModels();
+        void this.ollamaService.fetchModels().then((result) => {
+            if (!result.ok) {
+                logger.errorLog(
+                    'Failed to fetch models on startup',
+                    result.error,
+                );
+            }
+        });
 
         const triggerRefresh = () => this.events.trigger(EVENT_REFRESH_VIEWS);
         this.statusService = createStatusStoreService(dbName, triggerRefresh);
@@ -91,9 +100,11 @@ export default class MainPlugin extends Plugin {
         await this.vectorStoreService.load();
 
         this.tagManager = createTagManager();
+
         this.app.workspace.onLayoutReady(() => {
             this.tagManager.initialize(this.app.vault, this.app.metadataCache);
         });
+
         this.exclusionService = createExclusionService({
             settings: () => this.settings,
             tags: this.tagManager,

@@ -1,5 +1,5 @@
 import { searchSimilar } from 'logic/similarity_search';
-import { type App, SuggestModal, TFile } from 'obsidian';
+import { type App, SuggestModal, TFile, type WorkspaceLeaf } from 'obsidian';
 import type MainPlugin from '../main';
 import { logger } from '../shared/notify';
 import { formatPercent, getTitleFromPath } from '../shared/utils';
@@ -22,23 +22,15 @@ const parseOpenAction = (evt: MouseEvent | KeyboardEvent): OpenAction => {
 const wait = (ms: number): Promise<void> =>
     new Promise((resolve) => setTimeout(resolve, ms));
 
-const openFile = async (
-    app: App,
-    file: TFile,
-    action: OpenAction,
-): Promise<void> => {
-    const getLeaf = () => {
-        switch (action) {
-            case 'split':
-                return app.workspace.getLeaf('split', 'vertical');
-            case 'tab':
-                return app.workspace.getLeaf('tab');
-            case 'current':
-                return app.workspace.getLeaf(false);
-        }
-    };
-
-    await getLeaf().openFile(file);
+const getTargetLeaf = (app: App, action: OpenAction): WorkspaceLeaf => {
+    switch (action) {
+        case 'split':
+            return app.workspace.getLeaf('split', 'vertical');
+        case 'tab':
+            return app.workspace.getLeaf('tab');
+        case 'current':
+            return app.workspace.getLeaf(false);
+    }
 };
 
 const renderItem = (result: SemanticSearchResult, el: HTMLElement): void => {
@@ -63,14 +55,14 @@ const renderItem = (result: SemanticSearchResult, el: HTMLElement): void => {
 };
 
 export class SemanticSearchModal extends SuggestModal<SemanticSearchResult> {
-    private state: SearchState = {
+    private readonly state: SearchState = {
         lastQuery: '',
         isSearching: false,
     };
 
     constructor(
         app: App,
-        private plugin: MainPlugin,
+        private readonly plugin: MainPlugin,
     ) {
         super(app);
         this.setPlaceholder('Semantic search');
@@ -82,6 +74,10 @@ export class SemanticSearchModal extends SuggestModal<SemanticSearchResult> {
             { command: 'esc', purpose: 'Close' },
         ]);
 
+        this.registerKeyHandlers();
+    }
+
+    private registerKeyHandlers() {
         this.scope.register(['Mod'], 'Enter', (evt) => {
             this.selectActiveSuggestion(evt);
             return false;
@@ -108,8 +104,15 @@ export class SemanticSearchModal extends SuggestModal<SemanticSearchResult> {
         this.state.isSearching = true;
         this.setPlaceholder(`Searching for "${query}"...`);
 
-        const vectorRes =
-            await this.plugin.indexingService.getEmbeddings(query);
+        const indexingService = this.plugin.indexingService;
+        const vectorStore = this.plugin.vectorStoreService;
+
+        if (!indexingService || !vectorStore) {
+            this.setPlaceholder('Error: services not initialized');
+            return [];
+        }
+
+        const vectorRes = await indexingService.getEmbeddings(query);
 
         if (this.state.lastQuery !== query) return [];
         this.state.isSearching = false;
@@ -119,9 +122,9 @@ export class SemanticSearchModal extends SuggestModal<SemanticSearchResult> {
             return [];
         }
 
-        const results = searchSimilar(
+        const results = await searchSimilar(
             vectorRes.value,
-            this.plugin.vectorStoreService.getState(),
+            vectorStore.getState(),
             this.plugin.settings,
             new Set(),
             this.plugin.settings.searchLimit,
@@ -145,13 +148,16 @@ export class SemanticSearchModal extends SuggestModal<SemanticSearchResult> {
         evt: MouseEvent | KeyboardEvent,
     ): void {
         const file = this.app.vault.getAbstractFileByPath(result.path);
+
         if (!(file instanceof TFile)) {
             logger.error(`Selected file not found in vault: ${result.path}`);
             return;
         }
 
         const action = parseOpenAction(evt);
-        void openFile(this.app, file, action);
+        const leaf = getTargetLeaf(this.app, action);
+
+        void leaf.openFile(file);
 
         logger.errorLog(
             `Opened search result: ${result.path} (Score: ${result.similarity})`,

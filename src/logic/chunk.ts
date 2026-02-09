@@ -1,42 +1,19 @@
 import { getEncoding } from 'js-tiktoken';
 
-const HEADER_KEYS_BASE = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] as const;
-const OTHER_SEPARATORS = ['sentence', 'word', 'grapheme'] as const;
+const YIELD_THRESHOLD = 5000;
 
-type HeaderKey = (typeof HEADER_KEYS_BASE)[number];
-type SeparatorLevel = HeaderKey | (typeof OTHER_SEPARATORS)[number];
+const HeaderLevels = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] as const;
+const GranularityLevels = ['sentence', 'word', 'grapheme'] as const;
 
-type HeaderStack = Record<HeaderKey, string>;
-
-type TextChunk = {
-    text: string;
-    startLine: number;
-    endLine: number;
-};
-
-type AssemblyState = {
+export type TextChunk = {
     readonly text: string;
-    readonly tokens: number;
-    readonly startOffset: number;
+    readonly startLine: number;
+    readonly endLine: number;
 };
 
-type Tokenizer = {
-    readonly count: (t: string) => number;
-    readonly encode: (t: string) => Uint32Array;
-    readonly decode: (tokens: Uint32Array) => string;
-};
-
-type MarkdownEngine = {
-    readonly update: (text: string) => void;
-    readonly getBreadcrumb: () => string;
-};
-
-type AssemblyEngine = {
-    readonly add: (t: string, tokens: number) => void;
-    readonly flush: (endOffset: number, breadcrumb: string) => void;
-    readonly getTokens: () => number;
-    readonly getResult: () => readonly TextChunk[];
-};
+type HeaderLevel = (typeof HeaderLevels)[number];
+type Granularity = (typeof GranularityLevels)[number];
+type Separator = HeaderLevel | Granularity;
 
 type ChunkConfig = {
     readonly tokenizer: Tokenizer;
@@ -46,49 +23,109 @@ type ChunkConfig = {
     readonly lineStarts: readonly number[];
 };
 
-const HEADER_KEYS: readonly HeaderKey[] = HEADER_KEYS_BASE;
-const SEPARATORS: readonly SeparatorLevel[] = [
-    ...HEADER_KEYS_BASE,
-    ...OTHER_SEPARATORS,
+type Tokenizer = {
+    readonly count: (text: string) => number;
+    readonly encode: (text: string) => Uint32Array;
+    readonly decode: (tokens: Uint32Array) => string;
+};
+
+type MarkdownEngine = {
+    readonly update: (text: string) => void;
+    readonly getBreadcrumb: () => string;
+};
+
+type AssemblyEngine = {
+    readonly add: (text: string, tokenCount: number) => void;
+    readonly flush: (endOffset: number, breadcrumb: string) => void;
+    readonly getTokens: () => number;
+    readonly getResult: () => readonly TextChunk[];
+};
+
+type UtilsType = {
+    readonly findLineNumber: (
+        pos: number,
+        lineStarts: readonly number[],
+    ) => number;
+    readonly getLineStarts: (text: string) => readonly number[];
+    readonly yieldToEventLoop: (offset: number) => Promise<void>;
+};
+
+type CachesType = {
+    readonly getHeaderRegex: (depth: number) => RegExp;
+    readonly getSegmenter: (granularity: Granularity) => Intl.Segmenter;
+};
+
+const Separators: readonly Separator[] = [
+    ...HeaderLevels,
+    ...GranularityLevels,
 ];
 
-const REGEX_CACHE: Map<number, RegExp> = new Map();
-
-const SEGMENTER_CACHE: Map<string, Intl.Segmenter> = new Map();
-
-const getHeaderRegex = (depth: number): RegExp => {
-    const cached = REGEX_CACHE.get(depth);
-    if (cached !== undefined) return cached;
-    const rex = new RegExp(`(?=\\n${'#'.repeat(depth)} )`);
-    REGEX_CACHE.set(depth, rex);
-    return rex;
-};
-
-const getSegmenter = (
-    granularity: 'sentence' | 'word' | 'grapheme',
-): Intl.Segmenter => {
-    const cached = SEGMENTER_CACHE.get(granularity);
-    if (cached !== undefined) return cached;
-    const seg = new Intl.Segmenter(undefined, { granularity });
-    SEGMENTER_CACHE.set(granularity, seg);
-    return seg;
-};
-
-const findLineNumber = (pos: number, lineStarts: readonly number[]): number => {
-    let l = 0;
-    let r = lineStarts.length - 1;
-    let res = 0;
-    while (l <= r) {
-        const m = (l + r) >> 1;
-        if ((lineStarts[m] ?? 0) <= pos) {
-            res = m;
-            l = m + 1;
-        } else {
-            r = m - 1;
+const Utils: UtilsType = {
+    findLineNumber: (pos, lineStarts) => {
+        let l = 0;
+        let r = lineStarts.length - 1;
+        let res = 0;
+        while (l <= r) {
+            const m = (l + r) >> 1;
+            if ((lineStarts[m] ?? 0) <= pos) {
+                res = m;
+                l = m + 1;
+            } else {
+                r = m - 1;
+            }
         }
-    }
-    return res;
+        return res;
+    },
+
+    getLineStarts: (text) => {
+        const positions: number[] = [0];
+        let i = -1;
+        while (true) {
+            i = text.indexOf('\n', i + 1);
+            if (i === -1) break;
+            positions.push(i + 1);
+        }
+        return positions;
+    },
+
+    yieldToEventLoop: async (offset) => {
+        if (offset > 0 && offset % YIELD_THRESHOLD === 0) {
+            if (typeof MessageChannel !== 'undefined') {
+                await new Promise<void>((resolve) => {
+                    const channel = new MessageChannel();
+                    channel.port1.onmessage = () => resolve();
+                    channel.port2.postMessage(null);
+                });
+            } else {
+                await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+        }
+    },
 };
+
+const Caches: CachesType = (() => {
+    const regexMap = new Map<number, RegExp>();
+    const segmenterMap = new Map<string, Intl.Segmenter>();
+
+    return {
+        getHeaderRegex: (depth) => {
+            let rex = regexMap.get(depth);
+            if (!rex) {
+                rex = new RegExp(`(?=\\n${'#'.repeat(depth)} )`);
+                regexMap.set(depth, rex);
+            }
+            return rex;
+        },
+        getSegmenter: (granularity) => {
+            let seg = segmenterMap.get(granularity);
+            if (!seg) {
+                seg = new Intl.Segmenter(undefined, { granularity });
+                segmenterMap.set(granularity, seg);
+            }
+            return seg;
+        },
+    };
+})();
 
 const createTokenizer = (): Tokenizer => {
     const encoding = getEncoding('cl100k_base');
@@ -100,146 +137,160 @@ const createTokenizer = (): Tokenizer => {
 };
 
 const createMarkdownEngine = (): MarkdownEngine => {
-    let stack: HeaderStack = { h1: '', h2: '', h3: '', h4: '', h5: '', h6: '' };
+    const stack: Record<HeaderLevel, string> = {
+        h1: '',
+        h2: '',
+        h3: '',
+        h4: '',
+        h5: '',
+        h6: '',
+    };
+    const headerRegex = /^\n?(#{1,6})\s+(.*)/;
+
     return {
         update: (text) => {
-            const match = text.match(/^\n?(#{1,6})\s+(.*)/);
-            if (match === null) return;
-            const depth = match[1]?.length ?? 0;
-            if (depth < 1 || depth > 6) return;
+            const match = text.match(headerRegex);
+            if (!match || !match[1]) return;
 
-            const next = { ...stack };
-            const content = (match[2] ?? '').trim();
-            HEADER_KEYS.forEach((key, i) => {
-                const d = i + 1;
-                if (d === depth) next[key] = content;
-                else if (d > depth) next[key] = '';
+            const depth = match[1].length;
+            const content = (match[2] || '').trim();
+
+            HeaderLevels.forEach((key, index) => {
+                const currentDepth = index + 1;
+                if (currentDepth === depth) {
+                    stack[key] = content;
+                } else if (currentDepth > depth) {
+                    stack[key] = '';
+                }
             });
-            stack = next;
         },
         getBreadcrumb: () => {
-            const parts = [stack.h1, stack.h2, stack.h3].filter(
-                (p) => p !== '',
-            );
+            const parts = [stack.h1, stack.h2, stack.h3].filter(Boolean);
             return parts.length > 0 ? `[Context: ${parts.join(' > ')}]\n` : '';
         },
     };
 };
 
 const createAssemblyEngine = (config: ChunkConfig): AssemblyEngine => {
-    let state: AssemblyState = { text: '', tokens: 0, startOffset: 0 };
-    const chunks: TextChunk[] = [];
+    let bufferText = '';
+    let bufferTokens = 0;
+    let startOffset = 0;
+    const results: TextChunk[] = [];
 
     return {
-        add: (t, tokens) => {
-            state = {
-                ...state,
-                text: state.text + t,
-                tokens: state.tokens + tokens,
-            };
+        add: (text, tokenCount) => {
+            bufferText += text;
+            bufferTokens += tokenCount;
         },
         flush: (endOffset, breadcrumb) => {
-            const content = state.text.trim();
-            if (content === '') return;
+            const content = bufferText.trim();
+            if (!content) return;
 
-            chunks.push({
+            results.push({
                 text: `${config.titlePrefix}${breadcrumb}${content}`,
-                startLine: findLineNumber(state.startOffset, config.lineStarts),
-                endLine: findLineNumber(endOffset, config.lineStarts),
+                startLine: Utils.findLineNumber(startOffset, config.lineStarts),
+                endLine: Utils.findLineNumber(endOffset, config.lineStarts),
             });
 
-            const currentTokens = config.tokenizer.encode(state.text);
-            if (currentTokens.length > config.overlap) {
-                const overlapText = config.tokenizer.decode(
-                    currentTokens.slice(-config.overlap),
-                );
-                state = {
-                    text: overlapText,
-                    tokens: config.overlap,
-                    startOffset: Math.max(0, endOffset - overlapText.length),
-                };
+            const currentEncoded = config.tokenizer.encode(bufferText);
+            if (currentEncoded.length > config.overlap) {
+                const overlapTokens = currentEncoded.slice(-config.overlap);
+                const overlapText = config.tokenizer.decode(overlapTokens);
+
+                bufferText = overlapText;
+                bufferTokens = config.overlap;
+                startOffset = Math.max(0, endOffset - overlapText.length);
             } else {
-                state = { text: '', tokens: 0, startOffset: endOffset };
+                bufferText = '';
+                bufferTokens = 0;
+                startOffset = endOffset;
             }
         },
-        getTokens: () => state.tokens,
-        getResult: () => chunks,
+        getTokens: () => bufferTokens,
+        getResult: () => results,
     };
 };
 
-const splitText = (text: string, level: SeparatorLevel): readonly string[] => {
-    if (level.startsWith('h')) {
+const splitText = (text: string, separator: Separator): readonly string[] => {
+    if (separator.startsWith('h')) {
+        const depth = parseInt(separator.slice(1), 10);
         return text
-            .split(getHeaderRegex(Number(level.slice(1))))
-            .filter((s) => s !== '');
+            .split(Caches.getHeaderRegex(depth))
+            .filter((s) => s.length > 0);
     }
-    const granularity = level as 'sentence' | 'word' | 'grapheme';
-    return Array.from(getSegmenter(granularity).segment(text)).map(
+    const granularity = separator as Granularity;
+    return Array.from(
+        Caches.getSegmenter(granularity).segment(text),
         (s) => s.segment,
     );
 };
 
 const processSegment = async (
     text: string,
-    levelIdx: number,
-    offset: number,
+    levelIndex: number,
+    currentOffset: number,
     md: MarkdownEngine,
     assembly: AssemblyEngine,
     config: ChunkConfig,
 ): Promise<void> => {
-    if (offset % 5000 === 0) await new Promise((r) => setTimeout(r, 0));
+    await Utils.yieldToEventLoop(currentOffset);
 
-    const level = SEPARATORS[levelIdx];
-    if (level === undefined) return;
+    const separator = Separators[levelIndex];
+    if (!separator) return;
 
-    if (level.startsWith('h')) md.update(text);
+    if (separator.startsWith('h')) {
+        md.update(text);
+    }
 
     const breadcrumb = md.getBreadcrumb();
     const cost = config.tokenizer.count(breadcrumb);
-    const targetTokens = config.tokenizer.count(text);
+    const textTokens = config.tokenizer.count(text);
 
-    if (assembly.getTokens() + targetTokens <= config.limit - cost) {
-        assembly.add(text, targetTokens);
+    if (assembly.getTokens() + textTokens <= config.limit - cost) {
+        assembly.add(text, textTokens);
         return;
     }
 
-    const nextIdx = levelIdx + 1;
-    if (nextIdx < SEPARATORS.length) {
-        const parts = splitText(text, level);
+    const nextLevelIndex = levelIndex + 1;
+    if (nextLevelIndex < Separators.length) {
+        const parts = splitText(text, separator);
+
         if (parts.length > 1) {
-            let currentOffset = offset;
+            let offset = currentOffset;
             for (const part of parts) {
                 await processSegment(
                     part,
-                    nextIdx,
-                    currentOffset,
+                    nextLevelIndex,
+                    offset,
                     md,
                     assembly,
                     config,
                 );
-                currentOffset += part.length;
+                offset += part.length;
             }
             return;
         }
-        await processSegment(text, nextIdx, offset, md, assembly, config);
+
+        await processSegment(
+            text,
+            nextLevelIndex,
+            currentOffset,
+            md,
+            assembly,
+            config,
+        );
         return;
     }
 
-    if (assembly.getTokens() > 0) assembly.flush(offset, breadcrumb);
-    assembly.add(text, targetTokens);
-    if (assembly.getTokens() >= config.limit - cost) {
-        assembly.flush(offset + text.length, breadcrumb);
+    if (assembly.getTokens() > 0) {
+        assembly.flush(currentOffset, breadcrumb);
     }
-};
 
-const getLineStarts = (text: string): readonly number[] => {
-    const positions: number[] = [0];
-    for (let i = 0; i < text.length; i++) {
-        if (text[i] === '\n') {
-            positions.push(i + 1);
-        }
+    assembly.add(text, textTokens);
+
+    if (assembly.getTokens() >= config.limit - cost) {
+        assembly.flush(currentOffset + text.length, breadcrumb);
     }
-    return positions;
 };
 
 export const createChunks = async (
@@ -249,27 +300,29 @@ export const createChunks = async (
     overlapRatio: number,
     title?: string,
 ): Promise<TextChunk[]> => {
-    if (text === '') return [];
+    if (!text) return [];
 
     const tokenizer = createTokenizer();
-    const titlePrefix = title !== undefined ? `Title: ${title}\nContent: ` : '';
-    const limit = Math.floor(
+    const titlePrefix = title ? `Title: ${title}\nContent: ` : '';
+
+    const effectiveLimit = Math.floor(
         (maxTokens - tokenizer.count(titlePrefix)) * safetyMargin,
     );
 
     const config: ChunkConfig = {
         tokenizer,
-        limit,
-        overlap: Math.floor(limit * overlapRatio),
+        limit: effectiveLimit,
+        overlap: Math.floor(effectiveLimit * overlapRatio),
         titlePrefix,
-        lineStarts: getLineStarts(text),
+        lineStarts: Utils.getLineStarts(text),
     };
 
-    const md = createMarkdownEngine();
-    const assembly = createAssemblyEngine(config);
+    const mdEngine = createMarkdownEngine();
+    const assemblyEngine = createAssemblyEngine(config);
 
-    await processSegment(text, 0, 0, md, assembly, config);
-    assembly.flush(text.length, md.getBreadcrumb());
+    await processSegment(text, 0, 0, mdEngine, assemblyEngine, config);
 
-    return [...assembly.getResult()];
+    assemblyEngine.flush(text.length, mdEngine.getBreadcrumb());
+
+    return [...assemblyEngine.getResult()];
 };

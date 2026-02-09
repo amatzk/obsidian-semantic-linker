@@ -43,6 +43,13 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
         this.renderAdvancedSettings(containerEl);
     }
 
+    private save = async (
+        update: Partial<typeof this.plugin.settings>,
+    ): Promise<void> => {
+        Object.assign(this.plugin.settings, update);
+        await this.plugin.saveSettings();
+    };
+
     private renderConnection(container: HTMLElement) {
         const group = new SettingGroup(container);
         group.setHeading('Connection');
@@ -50,16 +57,24 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
         group.addSetting((setting) => {
             setting
                 .setName('Ollama URL')
-                .setDesc('Ollama server base URL (e.g: http://localhost:11434)')
-                .addText((t) =>
-                    t
+                .setDesc(
+                    'Ollama server base URL (e.g., http://localhost:11434)',
+                )
+                .addText((text) =>
+                    text
                         .setValue(this.plugin.settings.ollamaUrl)
                         .onChange(async (val) => {
                             this.plugin.settings.ollamaUrl = val;
                             await this.plugin.saveSettings();
-                            void this.plugin.ollamaService
-                                .fetchModels()
-                                .then(() => this.display());
+                            const result =
+                                await this.plugin.ollamaService.fetchModels();
+                            if (!result.ok) {
+                                logger.error(
+                                    'Failed to connect to Ollama',
+                                    result.error,
+                                );
+                            }
+                            this.display();
                         }),
                 );
         });
@@ -67,25 +82,20 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
         group.addSetting((setting) => {
             setting
                 .setName('Ollama model')
-                .setDesc('Model used for vector generation.')
-                .addDropdown((d) => {
-                    const models = this.plugin.ollamaService.getModels();
-
-                    if (models.length > 0) {
-                        this.populateModelDropdown(d, models);
-                    } else {
-                        d.addOption('', 'Loading models...');
-                        d.setDisabled(true);
-                        void this.plugin.ollamaService
-                            .fetchModels()
-                            .then(() => this.display());
-                    }
-                })
+                .setDesc('The model used for vector generation.')
+                .addDropdown((d) => this.setupModelDropdown(d))
                 .addExtraButton((btn) => {
                     btn.setIcon('rotate-cw')
                         .setTooltip('Refresh model list')
                         .onClick(async () => {
-                            await this.plugin.ollamaService.fetchModels();
+                            const result =
+                                await this.plugin.ollamaService.fetchModels();
+                            if (!result.ok) {
+                                logger.error(
+                                    'Failed to refresh models',
+                                    result.error,
+                                );
+                            }
                             this.display();
                         });
                 });
@@ -94,9 +104,29 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
         });
     }
 
+    private setupModelDropdown(d: DropdownComponent) {
+        const models = this.plugin.ollamaService.getModels();
+
+        if (models.length > 0) {
+            this.populateModelDropdown(d, models);
+        } else {
+            d.addOption('', 'Loading models...');
+            d.setDisabled(true);
+            void this.plugin.ollamaService.fetchModels().then((result) => {
+                if (result.ok) {
+                    this.display();
+                } else {
+                    d.selectEl.empty();
+                    d.addOption('', 'Connection error');
+                    d.setDisabled(true);
+                }
+            });
+        }
+    }
+
     private populateModelDropdown(
         dropdown: DropdownComponent,
-        models: string[],
+        models: readonly string[],
     ) {
         const current = this.plugin.settings.ollamaModel;
         dropdown.selectEl.empty();
@@ -135,6 +165,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
         setting.descEl
             .querySelector('.setting-item-description-spec')
             ?.remove();
+
         setting.descEl.createEl('div', {
             text: `Context length: ${contextLength} tokens`,
             cls: 'setting-item-description-spec text-[0.85em] text-[var(--text-muted)] mt-1',
@@ -143,7 +174,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
 
     private renderIndex(container: HTMLElement) {
         const group = new SettingGroup(container);
-        group.setHeading('Index');
+        group.setHeading('Indexing');
 
         this.addIndexControls(group);
         this.addAutoIndexDelay(group);
@@ -156,11 +187,11 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
             const status = this.plugin.statusService.getState();
             const lastTime = status.lastIndexTime
                 ? new Date(status.lastIndexTime).toLocaleString()
-                : 'Not indexed';
+                : 'Never';
 
             setting
                 .setName('Index management')
-                .setDesc('Re-build the entire index.');
+                .setDesc('Rebuild the entire search index.');
 
             const statsContainer = setting.descEl.createDiv({
                 cls: 'p-2 bg-[var(--background-secondary-alt)] border border-[var(--background-modifier-border)] rounded-sm mt-2 text-[0.9em] leading-normal space-y-1',
@@ -190,12 +221,10 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
         setting.addButton((btn) => {
             switch (state.type) {
                 case 'reindex':
-                    btn.setButtonText('Re-index vault').onClick(() => {
+                    btn.setButtonText('Reindex vault').onClick(() => {
                         void this.plugin.indexingService
                             .runFullIndex(true)
-                            .finally(() => {
-                                this.display();
-                            });
+                            .finally(() => this.display());
                         this.display();
                     });
                     btn.buttonEl.addClass(
@@ -229,7 +258,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
 
         setting.addExtraButton((btn) => {
             btn.setIcon('trash')
-                .setTooltip('Clear entire index cache')
+                .setTooltip('Clear index cache')
                 .onClick(async () => {
                     await this.plugin.indexingService.clearIndex();
                     logger.info('Index cache has been cleared.');
@@ -241,12 +270,12 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
     private addAutoIndexDelay(group: SettingGroup) {
         group.addSetting((setting) => {
             setting
-                .setName('Auto-index delay (ms)')
+                .setName('Auto-indexing delay (ms)')
                 .setDesc(
-                    'Delay before starting the index process after a file change.',
+                    'The delay before starting the indexing process after a file changes.',
                 )
-                .addText((t) =>
-                    t
+                .addText((text) =>
+                    text
                         .setValue(
                             this.plugin.settings.fileProcessingDelay.toString(),
                         )
@@ -267,115 +296,20 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
         group.addSetting((setting) => {
             setting
                 .setName('Include frontmatter (YAML)')
-                .setDesc(
-                    'Whether to include the YAML frontmatter in the analysis.',
-                )
-                .addToggle((t) =>
-                    t
+                .setDesc('Include YAML frontmatter in the semantic analysis.')
+                .addToggle((toggle) =>
+                    toggle
                         .setValue(this.plugin.settings.includeFrontmatter)
                         .onChange(async (val) => {
-                            this.plugin.settings.includeFrontmatter = val;
-                            await this.plugin.saveSettings();
+                            await this.save({ includeFrontmatter: val });
                         }),
                 );
         });
     }
 
     private addExclusionInput(group: SettingGroup) {
-        let tagsBeforeEdit = [...this.plugin.settings.excludedTags];
-
-        group.addSetting((setting) => {
-            setting
-                .setName('Excluded files/folders')
-                .setDesc(
-                    'Specify file or folder patterns to exclude from indexing (gitignore format, one per line).',
-                );
-
-            setting.addTextArea((textarea) =>
-                textarea
-                    .setValue(this.plugin.settings.excludePatterns.join('\n'))
-                    .setPlaceholder('Templates/\n*.log\nsecret-*')
-                    .onChange(async (val) => {
-                        this.plugin.settings.excludePatterns = val
-                            .split('\n')
-                            .filter((p) => !!p.trim());
-
-                        await this.plugin.saveSettings();
-                        refreshPreview();
-                    }),
-            );
-        });
-
-        group.addSetting((setting) => {
-            setting
-                .setName('Excluded tags')
-                .setDesc(
-                    'Files containing any of these tags will be excluded. Separate with commas or spaces.',
-                );
-
-            setting.addText((text) => {
-                text.setPlaceholder('Private, draft, internal')
-                    .setValue(this.plugin.settings.excludedTags.join(', '))
-                    .onChange(async (val) => {
-                        this.plugin.settings.excludedTags = val
-                            .split(/[,\s]+/)
-                            .map((t) => t.replace(/^#/, '').trim())
-                            .filter((t) => t.length > 0);
-
-                        await this.plugin.saveSettings();
-                        refreshPreview();
-                    });
-
-                text.inputEl.addEventListener('focus', () => {
-                    tagsBeforeEdit = [...this.plugin.settings.excludedTags];
-                });
-
-                new TagSuggest(this.app, text.inputEl, this.plugin);
-            });
-        });
-
         let statusEl: HTMLElement;
         let previewListEl: HTMLElement;
-
-        group.addSetting((setting) => {
-            setting.setName('Matched files');
-            setting.settingEl.addClass('!items-end');
-
-            statusEl = setting.descEl.createDiv();
-            previewListEl = setting.descEl.createDiv({ cls: 'mt-2' });
-
-            setting.addButton((btn) => {
-                btn.setButtonText('Apply')
-                    .setTooltip('Remove matched files from the index')
-                    .onClick(async () => {
-                        const tagsAfterEdit = this.plugin.settings.excludedTags;
-
-                        const isChanged =
-                            tagsBeforeEdit.length !== tagsAfterEdit.length ||
-                            tagsBeforeEdit.some(
-                                (tag, index) => tag !== tagsAfterEdit[index],
-                            );
-                        if (!isChanged) {
-                            logger.info('No changes to apply.');
-                            return;
-                        }
-
-                        const isReduced = tagsBeforeEdit.some(
-                            (tag) => !tagsAfterEdit.includes(tag),
-                        );
-                        await this.plugin.indexingService.applyExclusion();
-                        if (isReduced) {
-                            logger.warn(
-                                'Excluded tags have been changed. To add previously excluded files back into the index, please run "Index all files".',
-                                true,
-                            );
-                        }
-
-                        tagsBeforeEdit = [...tagsAfterEdit];
-                    });
-                btn.buttonEl.addClass('transition-all', 'duration-200');
-            });
-        });
 
         const refreshPreview = () => {
             const files = this.app.vault.getMarkdownFiles();
@@ -387,7 +321,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
             statusEl.setText(
                 count === 0
                     ? 'No files match the exclusion patterns.'
-                    : `${count} files will be excluded from indexing.`,
+                    : `${count} ${count === 1 ? 'file' : 'files'} will be excluded from indexing.`,
             );
 
             previewListEl.empty();
@@ -404,6 +338,105 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
                 }
             }
         };
+
+        group.addSetting((setting) => {
+            setting
+                .setName('Excluded files/folders')
+                .setDesc(
+                    'Specify file or folder patterns to exclude (gitignore format, one per line).',
+                );
+
+            setting.addTextArea((textarea) =>
+                textarea
+                    .setValue(this.plugin.settings.excludePatterns.join('\n'))
+                    .setPlaceholder('Templates/\n*.log\nsecret-*')
+                    .onChange(async (val) => {
+                        const patterns = val
+                            .split('\n')
+                            .filter((p) => !!p.trim());
+
+                        this.plugin.settings.excludePatterns = patterns;
+                        this.plugin.exclusionService.refresh();
+
+                        await this.plugin.saveSettings();
+                        refreshPreview();
+                    }),
+            );
+        });
+
+        let tagsBeforeEdit = [...this.plugin.settings.excludedTags];
+
+        group.addSetting((setting) => {
+            setting
+                .setName('Excluded tags')
+                .setDesc(
+                    'Files containing any of these tags will be excluded. Separate with commas or spaces.',
+                );
+
+            setting.addText((text) => {
+                text.setPlaceholder('Private, draft, internal')
+                    .setValue(this.plugin.settings.excludedTags.join(', '))
+                    .onChange(async (val) => {
+                        const tags = val
+                            .split(/[,\s]+/)
+                            .map((t) => t.replace(/^#/, '').trim())
+                            .filter((t) => t.length > 0);
+
+                        this.plugin.settings.excludedTags = tags;
+                        await this.plugin.saveSettings();
+                        refreshPreview();
+                    });
+
+                text.inputEl.addEventListener('focus', () => {
+                    tagsBeforeEdit = [...this.plugin.settings.excludedTags];
+                });
+
+                new TagSuggest(this.app, text.inputEl, this.plugin);
+            });
+        });
+
+        group.addSetting((setting) => {
+            setting.setName('Excluded files preview');
+            setting.settingEl.addClass('!items-end');
+
+            statusEl = setting.descEl.createDiv();
+            previewListEl = setting.descEl.createDiv({ cls: 'mt-2' });
+
+            setting.addButton((btn) => {
+                btn.setButtonText('Apply')
+                    .setTooltip('Remove matched files from the index')
+                    .onClick(async () => {
+                        const tagsAfterEdit = this.plugin.settings.excludedTags;
+
+                        const isChanged =
+                            tagsBeforeEdit.length !== tagsAfterEdit.length ||
+                            tagsBeforeEdit.some(
+                                (tag, index) => tag !== tagsAfterEdit[index],
+                            );
+
+                        if (!isChanged) {
+                            logger.info('No changes to apply.');
+                            return;
+                        }
+
+                        const isReduced = tagsBeforeEdit.some(
+                            (tag) => !tagsAfterEdit.includes(tag),
+                        );
+
+                        await this.plugin.indexingService.applyExclusion();
+
+                        if (isReduced) {
+                            logger.warn(
+                                'Exclusion patterns changed. To add previously excluded files back to the index, please run "Reindex vault".',
+                                true,
+                            );
+                        }
+
+                        tagsBeforeEdit = [...tagsAfterEdit];
+                    });
+                btn.buttonEl.addClass('transition-all', 'duration-200');
+            });
+        });
 
         refreshPreview();
     }
@@ -423,9 +456,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
                         .setLimits(0, 1, 0.01)
                         .setValue(this.plugin.settings.threshold)
                         .setDynamicTooltip()
-                        .onChange((v) => {
-                            void this.save({ threshold: v });
-                        }),
+                        .onChange((v) => void this.save({ threshold: v })),
                 );
         });
 
@@ -440,9 +471,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
                         .setLimits(1, 50, 1)
                         .setValue(this.plugin.settings.sidebarLimit)
                         .setDynamicTooltip()
-                        .onChange((v) => {
-                            void this.save({ sidebarLimit: v });
-                        }),
+                        .onChange((v) => void this.save({ sidebarLimit: v })),
                 );
         });
 
@@ -457,9 +486,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
                         .setLimits(50, 1000, 50)
                         .setValue(this.plugin.settings.previewLength)
                         .setDynamicTooltip()
-                        .onChange((v) => {
-                            void this.save({ previewLength: v });
-                        }),
+                        .onChange((v) => void this.save({ previewLength: v })),
                 );
         });
 
@@ -469,12 +496,11 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
                 .setDesc(
                     'Display similar notes at the bottom of each note (like backlinks).',
                 )
-                .addToggle((t) =>
-                    t
+                .addToggle((toggle) =>
+                    toggle
                         .setValue(this.plugin.settings.showInlineSimilarNotes)
                         .onChange(async (val) => {
-                            this.plugin.settings.showInlineSimilarNotes = val;
-                            await this.plugin.saveSettings();
+                            await this.save({ showInlineSimilarNotes: val });
                         }),
                 );
         });
@@ -495,9 +521,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
                         .setLimits(1, 100, 1)
                         .setValue(this.plugin.settings.searchLimit)
                         .setDynamicTooltip()
-                        .onChange((v) => {
-                            void this.save({ searchLimit: v });
-                        }),
+                        .onChange((v) => void this.save({ searchLimit: v })),
                 );
         });
 
@@ -505,7 +529,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
             setting
                 .setName('Search debounce time (ms)')
                 .setDesc(
-                    'Time to wait after the last keystroke before performing a semantic search.',
+                    'Wait time after the last keystroke before performing a semantic search.',
                 )
                 .addText((text) =>
                     text
@@ -526,16 +550,14 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
             setting
                 .setName('Minimum query length')
                 .setDesc(
-                    'Minimum number of characters required for search queries.',
+                    'Minimum number of characters required to trigger a search.',
                 )
                 .addSlider((slider) =>
                     slider
                         .setLimits(1, 20, 1)
                         .setValue(this.plugin.settings.minQueryLength)
                         .setDynamicTooltip()
-                        .onChange((v) => {
-                            void this.save({ minQueryLength: v });
-                        }),
+                        .onChange((v) => void this.save({ minQueryLength: v })),
                 );
         });
     }
@@ -548,61 +570,55 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
             setting
                 .setName('Introduction weight')
                 .setDesc(
-                    'Weight multiplier for the first chunk (title/intro). Higher = prioritizes intro.',
+                    'Weight multiplier for the first chunk (title/intro). Higher values prioritize the introduction.',
                 )
                 .addSlider((slider) =>
                     slider
                         .setLimits(1.0, 3.0, 0.1)
                         .setValue(this.plugin.settings.introWeight)
                         .setDynamicTooltip()
-                        .onChange((v) => {
-                            void this.save({ introWeight: v });
-                        }),
+                        .onChange((v) => void this.save({ introWeight: v })),
                 );
         });
 
         group.addSetting((setting) => {
             setting
                 .setName('Safety margin')
-                .setDesc('Buffers token limits to prevent API truncation.')
+                .setDesc('Buffer for token limits to prevent API truncation.')
                 .addSlider((slider) =>
                     slider
                         .setLimits(0.7, 0.99, 0.01)
                         .setValue(this.plugin.settings.safetyMargin || 0.95)
                         .setDynamicTooltip()
-                        .onChange((v) => {
-                            void this.save({ safetyMargin: v });
-                        }),
+                        .onChange((v) => void this.save({ safetyMargin: v })),
                 );
         });
 
         group.addSetting((setting) => {
             setting
                 .setName('Overlap ratio')
-                .setDesc('Context overlap between chunks.')
+                .setDesc('The amount of context overlap between text chunks.')
                 .addSlider((slider) =>
                     slider
                         .setLimits(0.0, 0.2, 0.01)
                         .setValue(this.plugin.settings.overlapRatio || 0.1)
                         .setDynamicTooltip()
-                        .onChange((v) => {
-                            void this.save({ overlapRatio: v });
-                        }),
+                        .onChange((v) => void this.save({ overlapRatio: v })),
                 );
         });
 
         group.addSetting((setting) => {
             setting
                 .setName('Retry reduction ratio')
-                .setDesc('How much to shrink chunks when a retry occurs.')
+                .setDesc(
+                    'The ratio by which chunks are shrunk when a retry occurs due to length.',
+                )
                 .addSlider((slider) =>
                     slider
                         .setLimits(0.7, 0.9, 0.01)
                         .setValue(this.plugin.settings.reductionRatio || 0.8)
                         .setDynamicTooltip()
-                        .onChange((v) => {
-                            void this.save({ reductionRatio: v });
-                        }),
+                        .onChange((v) => void this.save({ reductionRatio: v })),
                 );
         });
 
@@ -610,16 +626,14 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
             setting
                 .setName('Max embedding retries')
                 .setDesc(
-                    'Maximum number of retry attempts when embedding fails due to context length limits.',
+                    'Maximum number of retry attempts when embedding fails due to context limits.',
                 )
                 .addSlider((slider) =>
                     slider
                         .setLimits(1, 10, 1)
                         .setValue(this.plugin.settings.maxRetries || 5)
                         .setDynamicTooltip()
-                        .onChange((v) => {
-                            void this.save({ maxRetries: v });
-                        }),
+                        .onChange((v) => void this.save({ maxRetries: v })),
                 );
         });
 
@@ -627,25 +641,19 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
             setting
                 .setName('Parallel indexing count')
                 .setDesc(
-                    'Number of files to process simultaneously during full index. ' +
-                        '1 = sequential (safest), 4-8 = faster (requires more RAM and Ollama server resources).',
+                    'Number of files to process simultaneously during a full index.',
                 )
                 .addSlider((slider) =>
                     slider
-                        .setLimits(1, 10, 1)
+                        .setLimits(1, 32, 1)
                         .setValue(
                             this.plugin.settings.parallelIndexingCount || 1,
                         )
                         .setDynamicTooltip()
-                        .onChange((v) => {
-                            void this.save({ parallelIndexingCount: v });
-                        }),
+                        .onChange(
+                            (v) => void this.save({ parallelIndexingCount: v }),
+                        ),
                 );
         });
     }
-
-    private save = async (update: Partial<typeof this.plugin.settings>) => {
-        Object.assign(this.plugin.settings, update);
-        await this.plugin.saveSettings();
-    };
 }

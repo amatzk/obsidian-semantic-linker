@@ -49,14 +49,12 @@ export type SettingParams = {
 /**
  * 埋め込みベクトル
  */
-export type Vector = readonly number[];
+export type Vector = number[];
 
 /**
  * ファイル中の 1 チャンク分の情報
  */
 export type EmbeddedChunk = {
-    /** チャンクのテキスト */
-    readonly text: string;
     /** チャンクの埋め込みベクトル */
     readonly embedding: Vector;
     /** 元ファイルの開始行（0-indexed） */
@@ -75,6 +73,8 @@ export type EmbeddedNote = {
     readonly mtime: number;
     /** 分割済みチャンクの一覧 */
     readonly chunks: readonly EmbeddedChunk[];
+    /** チャンクの平均 */
+    readonly avgEmbedding: Vector;
 };
 
 /**
@@ -93,10 +93,16 @@ export type SemanticSearchResult = {
     path: string;
     /** 類似度スコア */
     similarity: number;
-    /** 最も似ていたチャンクのテキスト */
-    matchedText?: string;
     /** 該当部分の開始行 */
     startLine?: number;
     /** 該当部分の終了行 */
     endLine?: number;
+};
+
+/**
+ * 検索クエリ
+ */
+export type SearchQuery = {
+    readonly avg: Vector;
+    readonly chunks: readonly Vector[];
 };

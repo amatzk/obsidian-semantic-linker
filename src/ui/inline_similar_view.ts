@@ -1,59 +1,44 @@
-import { cleanText } from 'logic/cleaners';
-import { searchSimilar } from 'logic/similarity_search';
-import { averageEmbeddings } from 'logic/vector_operations';
 import { Component, type MarkdownView, setIcon, TFile } from 'obsidian';
+import { cleanText } from '../logic/cleaners';
+import { searchSimilar } from '../logic/similarity_search';
 import type MainPlugin from '../main';
 import { formatPercent, getTitleFromPath } from '../shared/utils';
 import type { SemanticSearchResult } from '../types';
 
 type PreviewState = {
-    isOpen: boolean;
-    element: HTMLElement;
-    toggle: HTMLElement;
+    readonly isOpen: boolean;
+    readonly element: HTMLElement;
+    readonly toggleBtn: HTMLElement;
 };
 
-const createOpenState = (evt: MouseEvent, line?: number) => {
+type OpenState = {
+    readonly newLeaf: boolean;
+    readonly state: { readonly eState: { readonly line: number } } | undefined;
+};
+
+const createOpenState = (evt: MouseEvent, line?: number): OpenState => {
     const newLeaf = evt.ctrlKey || evt.metaKey;
     const state = line !== undefined ? { eState: { line } } : undefined;
     return { newLeaf, state };
 };
 
-const searchByFile = async (
-    plugin: MainPlugin,
-    file: TFile,
-): Promise<SemanticSearchResult[]> => {
-    const entry = plugin.vectorStoreService.getState().entries[file.path];
-    if (!entry || entry.chunks.length === 0) return [];
-
-    const vector = await averageEmbeddings(
-        entry.chunks.map((c) => c.embedding),
-        plugin.settings.introWeight,
-    );
-
-    const excluded = plugin.getLinkedFiles(file);
-    excluded.add(file.path);
-
-    return searchSimilar(
-        vector,
-        plugin.vectorStoreService.getState(),
-        plugin.settings,
-        excluded,
-        plugin.settings.sidebarLimit,
-    );
-};
-
-const enableDrag = (el: HTMLElement, title: string) => {
+const enableDrag = (el: HTMLElement, title: string): void => {
     el.setAttribute('draggable', 'true');
     el.addEventListener('dragstart', (evt) => {
-        if (!evt.dataTransfer) return;
-        evt.dataTransfer.setData('text/plain', `[[${title}]]`);
-        evt.dataTransfer.dropEffect = 'copy';
+        const transfer = evt.dataTransfer;
+        if (transfer) {
+            transfer.setData('text/plain', `[[${title}]]`);
+            transfer.dropEffect = 'copy';
+        }
     });
 };
 
-const animatePreview = (state: PreviewState) => {
-    const { isOpen, element, toggle } = state;
-    setIcon(toggle, isOpen ? 'chevron-down' : 'chevron-right');
+const animatePreview = (
+    state: PreviewState,
+    updateState: (isOpen: boolean) => void,
+): void => {
+    const { isOpen, element, toggleBtn } = state;
+    setIcon(toggleBtn, isOpen ? 'chevron-down' : 'chevron-right');
 
     if (isOpen) {
         element.removeClass('hidden');
@@ -82,21 +67,53 @@ const animatePreview = (state: PreviewState) => {
             }
         }, 200);
     }
+    updateState(isOpen);
+};
+
+const searchByFile = async (
+    plugin: MainPlugin,
+    file: TFile,
+): Promise<readonly SemanticSearchResult[]> => {
+    const store = plugin.vectorStoreService?.getState();
+    if (!store) {
+        return [];
+    }
+
+    const entry = store.entries[file.path];
+    if (!entry || entry.chunks.length === 0 || !entry.avgEmbedding) {
+        return [];
+    }
+
+    const query = {
+        avg: entry.avgEmbedding,
+        chunks: entry.chunks.map((c) => c.embedding),
+    };
+    const excluded = plugin.getLinkedFiles(file);
+    excluded.add(file.path);
+
+    return searchSimilar(
+        query,
+        store,
+        plugin.settings,
+        excluded,
+        plugin.settings.sidebarLimit,
+    );
 };
 
 export class InlineSemanticView extends Component {
-    private readingContainerEl: HTMLElement;
-    private readingContentEl: HTMLElement;
-    private editingContainerEl: HTMLElement;
-    private editingContentEl: HTMLElement;
+    private readonly readingContainerEl: HTMLElement;
+    private readonly readingContentEl: HTMLElement;
+    private readonly editingContainerEl: HTMLElement;
+    private readonly editingContentEl: HTMLElement;
+
     private lastRenderedPath: string | null = null;
     private lastRenderedMtime: number | null = null;
     private isCollapsed = false;
     private paddingObserver: MutationObserver | null = null;
 
     constructor(
-        private view: MarkdownView,
-        private plugin: MainPlugin,
+        private readonly view: MarkdownView,
+        private readonly plugin: MainPlugin,
     ) {
         super();
         const reading = this.createContainer();
@@ -108,10 +125,45 @@ export class InlineSemanticView extends Component {
         this.editingContentEl = editing.content;
     }
 
-    private createContainer(): {
+    onload(): void {
+        this.plugin.app.workspace.onLayoutReady(() => {
+            window.requestAnimationFrame(() => {
+                this.attachToView();
+                void this.update();
+            });
+        });
+
+        this.registerEvent(
+            this.plugin.app.workspace.on('file-open', () => void this.update()),
+        );
+
+        this.registerEvent(
+            this.plugin.app.vault.on('modify', (file) => {
+                if (file === this.view.file) {
+                    void this.update();
+                }
+            }),
+        );
+
+        this.registerEvent(
+            this.plugin.events.on(
+                'semantic-linker:refresh-views',
+                () => void this.update(true),
+            ),
+        );
+    }
+
+    onunload(): void {
+        this.disconnectObserver();
+        this.restoreOriginalPadding();
+        this.readingContainerEl.remove();
+        this.editingContainerEl.remove();
+    }
+
+    private createContainer = (): {
         container: HTMLElement;
         content: HTMLElement;
-    } {
+    } => {
         const container = document.createElement('div');
         container.addClasses([
             'semantic-linker-inline-container',
@@ -128,37 +180,9 @@ export class InlineSemanticView extends Component {
         });
 
         return { container, content };
-    }
+    };
 
-    onload() {
-        setTimeout(() => {
-            this.attachToView();
-        }, 100);
-
-        void this.update();
-
-        this.registerEvent(
-            this.plugin.app.workspace.on('file-open', () => {
-                void this.update();
-            }),
-        );
-
-        this.registerEvent(
-            this.plugin.app.vault.on('modify', (file) => {
-                if (file === this.view.file) {
-                    void this.update();
-                }
-            }),
-        );
-
-        this.registerEvent(
-            this.plugin.events.on('semantic-linker:refresh-views', () => {
-                void this.update(true);
-            }),
-        );
-    }
-
-    private attachToView() {
+    private attachToView = (): void => {
         const contentEl = this.view.contentEl;
 
         const footer = contentEl.querySelector('.mod-footer');
@@ -171,14 +195,16 @@ export class InlineSemanticView extends Component {
             cmSizer.appendChild(this.editingContainerEl);
             this.setupPaddingObserver();
         }
-    }
+    };
 
-    private setupPaddingObserver() {
+    private setupPaddingObserver = (): void => {
         this.disconnectObserver();
 
         const contentEl = this.view.contentEl;
-        const cmContent = contentEl.querySelector('.cm-content') as HTMLElement;
-        if (!cmContent) return;
+        const cmContent = contentEl.querySelector('.cm-content');
+        if (!(cmContent instanceof HTMLElement)) {
+            return;
+        }
 
         this.paddingObserver = new MutationObserver((mutations) => {
             for (const mutation of mutations) {
@@ -186,7 +212,7 @@ export class InlineSemanticView extends Component {
                     mutation.type === 'attributes' &&
                     mutation.attributeName === 'style'
                 ) {
-                    this.syncPadding();
+                    this.syncPadding(cmContent);
                 }
             }
         });
@@ -196,48 +222,37 @@ export class InlineSemanticView extends Component {
             attributeFilter: ['style'],
         });
 
-        this.syncPadding();
-    }
+        this.syncPadding(cmContent);
+    };
 
-    private disconnectObserver() {
+    private disconnectObserver = (): void => {
         if (this.paddingObserver) {
             this.paddingObserver.disconnect();
             this.paddingObserver = null;
         }
-    }
+    };
 
-    private syncPadding() {
-        const contentEl = this.view.contentEl;
-        const cmContent = contentEl.querySelector('.cm-content') as HTMLElement;
-        if (!cmContent || !this.editingContainerEl) return;
-
+    private syncPadding = (cmContent: HTMLElement): void => {
         const paddingBottom = cmContent.style.paddingBottom;
         if (paddingBottom && paddingBottom !== '0px') {
-            this.editingContainerEl.setCssProps({
-                'padding-bottom': paddingBottom,
-            });
+            this.editingContainerEl.style.paddingBottom = paddingBottom;
             cmContent.setCssProps({ 'padding-bottom': '0px' });
         }
-    }
+    };
 
-    onunload() {
-        this.disconnectObserver();
-
-        const cmContent = this.view.contentEl.querySelector(
-            '.cm-content',
-        ) as HTMLElement;
-
-        if (cmContent && this.editingContainerEl.style.paddingBottom) {
+    private restoreOriginalPadding = (): void => {
+        const cmContent = this.view.contentEl.querySelector('.cm-content');
+        if (
+            cmContent instanceof HTMLElement &&
+            this.editingContainerEl.style.paddingBottom
+        ) {
             cmContent.setCssProps({
                 'padding-bottom': this.editingContainerEl.style.paddingBottom,
             });
         }
+    };
 
-        this.readingContainerEl.remove();
-        this.editingContainerEl.remove();
-    }
-
-    private async update(force = false) {
+    private update = async (force = false): Promise<void> => {
         const file = this.view.file;
 
         if (!file) {
@@ -247,9 +262,13 @@ export class InlineSemanticView extends Component {
         }
 
         this.attachToView();
-        this.syncPadding();
 
-        if (this.plugin.exclusionService.isExcluded(file)) {
+        const cmContent = this.view.contentEl.querySelector('.cm-content');
+        if (cmContent instanceof HTMLElement) {
+            this.syncPadding(cmContent);
+        }
+
+        if (this.plugin.exclusionService?.isExcluded(file)) {
             this.readingContainerEl.hide();
             this.editingContainerEl.hide();
             return;
@@ -268,23 +287,46 @@ export class InlineSemanticView extends Component {
 
         const results = await searchByFile(this.plugin, file);
         this.render(results, file);
+
         this.readingContainerEl.show();
         this.editingContainerEl.show();
-    }
+    };
 
-    private render(results: SemanticSearchResult[], file: TFile) {
+    private render = (
+        results: readonly SemanticSearchResult[],
+        file: TFile,
+    ): void => {
         this.renderToContainer(this.readingContentEl, results, file);
         this.renderToContainer(this.editingContentEl, results, file);
-    }
+    };
 
-    private renderToContainer(
+    private renderToContainer = (
         contentEl: HTMLElement,
-        results: SemanticSearchResult[],
+        results: readonly SemanticSearchResult[],
         file: TFile,
-    ) {
+    ): void => {
         contentEl.empty();
 
-        const header = contentEl.createDiv({
+        const { resultsContainer } = this.renderMainHeader(
+            contentEl,
+            results.length,
+        );
+
+        if (results.length === 0) {
+            this.renderEmptyState(resultsContainer, file);
+            return;
+        }
+
+        for (const result of results) {
+            this.renderResultItem(resultsContainer, result);
+        }
+    };
+
+    private renderMainHeader = (
+        container: HTMLElement,
+        count: number,
+    ): { resultsContainer: HTMLElement } => {
+        const header = container.createDiv({
             cls: 'flex items-center gap-2 mb-3 cursor-pointer py-1',
         });
 
@@ -302,11 +344,11 @@ export class InlineSemanticView extends Component {
         });
 
         header.createDiv({
-            text: `${results.length}`,
+            text: `${count}`,
             cls: 'text-xs text-[var(--text-muted)] bg-[var(--background-secondary)] px-2 py-0.5 rounded-[12px]',
         });
 
-        const resultsContainer = contentEl.createDiv({
+        const resultsContainer = container.createDiv({
             cls: this.isCollapsed ? 'hidden' : 'block',
         });
 
@@ -325,24 +367,15 @@ export class InlineSemanticView extends Component {
             );
         };
 
-        if (results.length === 0) {
-            this.renderEmpty(resultsContainer, file);
-            return;
-        }
+        return { resultsContainer };
+    };
 
-        for (const result of results) {
-            this.renderItem(resultsContainer, result);
-        }
-    }
-
-    private renderEmpty(container: HTMLElement, file: TFile) {
+    private renderEmptyState = (container: HTMLElement, file: TFile): void => {
         const empty = container.createDiv({
             cls: 'text-center p-5 text-[var(--text-muted)]',
         });
 
-        empty.createDiv({
-            text: 'No similar notes found.',
-        });
+        empty.createDiv({ text: 'No similar notes found.' });
 
         const btn = empty.createEl('button', {
             text: 'Analyze this note',
@@ -350,42 +383,45 @@ export class InlineSemanticView extends Component {
         });
 
         btn.onclick = async () => {
-            await this.plugin.indexingService.indexFile(file, true);
+            await this.plugin.indexingService?.indexFile(file, true);
         };
-    }
+    };
 
-    private renderItem(container: HTMLElement, result: SemanticSearchResult) {
+    private renderResultItem = (
+        container: HTMLElement,
+        result: SemanticSearchResult,
+    ): void => {
         const item = container.createDiv({
             cls: 'mb-2 cursor-grab active:cursor-grabbing',
         });
 
         const title = getTitleFromPath(result.path);
 
-        const toggle = this.renderHeader(
+        const toggleBtn = this.renderItemHeader(
             item,
             title,
             result.path,
             result.similarity,
         );
-        this.renderPreview(item, toggle, result.path);
+        this.renderItemPreview(item, toggleBtn, result.path);
 
         enableDrag(item, title);
-    }
+    };
 
-    private renderHeader(
+    private renderItemHeader = (
         container: HTMLElement,
         title: string,
         path: string,
         similarity: number,
-    ): HTMLElement {
+    ): HTMLElement => {
         const header = container.createDiv({
             cls: 'flex items-center gap-2 rounded-[4px] cursor-pointer transition-[background-color] duration-100 ease-in-out hover:bg-[var(--background-modifier-hover)] active:bg-[var(--background-modifier-active)]',
         });
 
-        const toggle = header.createDiv({
+        const toggleBtn = header.createDiv({
             cls: 'flex items-center justify-center w-6 h-6 shrink-0 text-[var(--text-muted)] transition-transform duration-100 cursor-pointer rounded-[4px] hover:bg-[var(--background-modifier-hover)] hover:text-[var(--text-normal)]',
         });
-        setIcon(toggle, 'chevron-right');
+        setIcon(toggleBtn, 'chevron-right');
 
         const titleEl = header.createDiv({
             text: title,
@@ -399,57 +435,72 @@ export class InlineSemanticView extends Component {
         });
 
         header.onclick = (e) => this.openFile(path, e);
+        toggleBtn.onclick = (e) => e.stopPropagation();
 
-        return toggle;
-    }
+        return toggleBtn;
+    };
 
-    private renderPreview(
+    private renderItemPreview = (
         container: HTMLElement,
         toggleBtn: HTMLElement,
         path: string,
-    ) {
-        const preview = container.createDiv({
+    ): void => {
+        const previewEl = container.createDiv({
             cls: 'ml-6 mt-1 mb-2 p-3 bg-[var(--background-primary)] border border-[var(--background-modifier-border)] text-[var(--text-muted)] rounded-[4px] text-xs leading-relaxed whitespace-pre-wrap break-words opacity-0 -translate-y-1 transition-[opacity,transform] duration-200 pointer-events-none hidden',
         });
 
+        let isOpen = false;
+
+        const updateState = (newState: boolean) => {
+            isOpen = newState;
+        };
+
         const state: PreviewState = {
-            isOpen: false,
-            element: preview,
-            toggle: toggleBtn,
+            get isOpen() {
+                return isOpen;
+            },
+            element: previewEl,
+            toggleBtn: toggleBtn,
         };
 
-        toggleBtn.onclick = async (e) => {
-            e.stopPropagation();
-            state.isOpen = !state.isOpen;
+        toggleBtn.addEventListener('click', () => {
+            void (async () => {
+                const nextState = !isOpen;
 
-            if (state.isOpen && preview.innerText === '') {
-                preview.setText('Loading...');
-                try {
-                    const text = await this.readFilePreview(path);
-                    preview.setText(text);
-                } catch {
-                    preview.setText('Failed to load preview.');
+                if (nextState && previewEl.innerText === '') {
+                    previewEl.setText('Loading...');
+                    try {
+                        const text = await this.getFilePreviewText(path);
+                        previewEl.setText(text);
+                    } catch {
+                        previewEl.setText('Failed to load preview.');
+                    }
                 }
-            }
-            animatePreview(state);
-        };
-    }
+                animatePreview({ ...state, isOpen: nextState }, updateState);
+            })();
+        });
+    };
 
-    private async readFilePreview(path: string): Promise<string> {
+    private getFilePreviewText = async (path: string): Promise<string> => {
         const file = this.plugin.app.vault.getAbstractFileByPath(path);
-        if (!(file instanceof TFile)) return 'File not found.';
+        if (!(file instanceof TFile)) {
+            return 'File not found.';
+        }
 
         const content = await this.plugin.app.vault.read(file);
         return cleanText(content, 'preview').slice(
             0,
             this.plugin.settings.previewLength,
         );
-    }
+    };
 
-    private openFile(path: string, evt: MouseEvent) {
+    private openFile = (path: string, evt: MouseEvent): void => {
         const file = this.plugin.app.vault.getAbstractFileByPath(path);
-        if (!(file instanceof TFile)) return;
+        if (!(file instanceof TFile)) {
+            return;
+        }
+
         const { newLeaf, state } = createOpenState(evt);
         void this.plugin.app.workspace.getLeaf(newLeaf).openFile(file, state);
-    }
+    };
 }

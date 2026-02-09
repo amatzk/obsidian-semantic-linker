@@ -20,7 +20,7 @@ export const DEFAULT_SETTINGS: SettingParams = {
     safetyMargin: 0.95,
     overlapRatio: 0.1,
     reductionRatio: 0.8,
-    parallelIndexingCount: 1,
+    parallelIndexingCount: 8,
     maxRetries: 5,
     showInlineSimilarNotes: true,
 };

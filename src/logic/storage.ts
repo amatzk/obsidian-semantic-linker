@@ -1,39 +1,11 @@
-type DBConfig = {
+export type DBConfig = {
     readonly dbName: string;
     readonly storeName: string;
     readonly version: number;
     readonly keyPath: string;
 };
 
-type CursorAction<T> = (item: T) => boolean | undefined;
-
-const promisify = <T>(request: IDBRequest<T> | IDBOpenDBRequest): Promise<T> =>
-    new Promise((resolve, reject) => {
-        request.onsuccess = () => resolve(request.result as T);
-
-        request.onerror = () => {
-            const error =
-                request.error ?? new Error('IndexedDB request failed');
-            reject(error instanceof Error ? error : new Error(String(error)));
-        };
-
-        if ('onblocked' in request) {
-            request.onblocked = () => {
-                console.warn(
-                    'IndexedDB blocked: Please close other tabs/windows.',
-                );
-            };
-        }
-    });
-
-const txAsPromise = (tx: IDBTransaction): Promise<void> =>
-    new Promise((resolve, reject) => {
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => {
-            const error = tx.error ?? new Error('Transaction failed');
-            reject(error instanceof Error ? error : new Error(String(error)));
-        };
-    });
+export type CursorAction<T> = (item: T) => boolean | undefined;
 
 export type RawStorage = {
     readonly getAll: <T>() => Promise<readonly T[]>;
@@ -47,19 +19,57 @@ export type RawStorage = {
     readonly deleteBatch: (keys: readonly string[]) => Promise<void>;
 };
 
+const toError = (maybeError: unknown, defaultMessage: string): Error => {
+    if (maybeError instanceof Error) return maybeError;
+    if (typeof maybeError === 'string') return new Error(maybeError);
+    return new Error(defaultMessage);
+};
+
+const promisify = <T>(request: IDBRequest<T> | IDBOpenDBRequest): Promise<T> =>
+    new Promise((resolve, reject) => {
+        request.onsuccess = () => {
+            const result = request.result;
+            resolve(result as T);
+        };
+
+        request.onerror = () => {
+            reject(toError(request.error, 'IndexedDB request failed'));
+        };
+
+        if ('onblocked' in request) {
+            request.onblocked = () => {
+                console.warn(
+                    'IndexedDB blocked: Please close other tabs/windows.',
+                );
+            };
+        }
+    });
+
+const waitForTransaction = (tx: IDBTransaction): Promise<void> =>
+    new Promise((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => {
+            reject(toError(tx.error, 'Transaction failed'));
+        };
+        tx.onabort = () => {
+            reject(toError(tx.error, 'Transaction aborted'));
+        };
+    });
+
 export const createStorageProvider = (config: DBConfig): RawStorage => {
     const STORES_DEF: Record<string, string> = {
         status: 'id',
         vectors: 'path',
     };
-    const open = async (): Promise<IDBDatabase> => {
+
+    const openDB = async (): Promise<IDBDatabase> => {
         const request = indexedDB.open(config.dbName, config.version);
 
-        request.onupgradeneeded = () => {
-            const db = request.result;
-            for (const [sName, kPath] of Object.entries(STORES_DEF)) {
-                if (!db.objectStoreNames.contains(sName)) {
-                    db.createObjectStore(sName, { keyPath: kPath });
+        request.onupgradeneeded = (event) => {
+            const db = (event.target as IDBOpenDBRequest).result;
+            for (const [storeName, keyPath] of Object.entries(STORES_DEF)) {
+                if (!db.objectStoreNames.contains(storeName)) {
+                    db.createObjectStore(storeName, { keyPath });
                 }
             }
         };
@@ -67,96 +77,102 @@ export const createStorageProvider = (config: DBConfig): RawStorage => {
         return promisify<IDBDatabase>(request);
     };
 
-    const withStore = async <T>(
+    const getTransactionContext = async (
         mode: IDBTransactionMode,
-        operation: (
-            store: IDBObjectStore,
-        ) => IDBRequest<T> | Promise<void> | void,
-    ): Promise<T> => {
-        const db = await open();
+    ): Promise<{ tx: IDBTransaction; store: IDBObjectStore }> => {
+        const db = await openDB();
         if (!db.objectStoreNames.contains(config.storeName)) {
+            db.close();
             throw new Error(
-                `Store "${config.storeName}" not found. Reload plugin.`,
+                `Store "${config.storeName}" not found. Please reload plugin.`,
             );
         }
         const tx = db.transaction(config.storeName, mode);
         const store = tx.objectStore(config.storeName);
+        return { tx, store };
+    };
 
-        let resultValue: T | undefined;
-        const opResult = operation(store);
+    const performRequest = async <T>(
+        operation: (store: IDBObjectStore) => IDBRequest<T> | IDBRequest,
+    ): Promise<T> => {
+        const { tx, store } = await getTransactionContext('readonly');
+        const request = operation(store);
+        const result = await promisify<T>(request as IDBRequest<T>);
 
-        if (opResult instanceof IDBRequest) {
-            resultValue = await promisify<T>(opResult);
-        } else if (opResult instanceof Promise) {
-            await opResult;
-        }
+        await waitForTransaction(tx);
+        return result;
+    };
 
-        await txAsPromise(tx);
-        return resultValue as T;
+    const performVoid = async (
+        operation: (store: IDBObjectStore) => void,
+    ): Promise<void> => {
+        const { tx, store } = await getTransactionContext('readwrite');
+        operation(store);
+        await waitForTransaction(tx);
     };
 
     return {
         getAll: <T>() =>
-            withStore<readonly T[]>(
-                'readonly',
-                (store) =>
-                    store.getAll() as unknown as IDBRequest<readonly T[]>,
-            ),
+            performRequest<readonly T[]>((store) => store.getAll()),
 
         getByKey: <T>(key: string) =>
-            withStore<T | undefined>(
-                'readonly',
-                (store) =>
-                    store.get(key) as unknown as IDBRequest<T | undefined>,
-            ),
+            performRequest<T | undefined>((store) => store.get(key)),
 
         getKeys: () =>
-            withStore<readonly string[]>(
-                'readonly',
-                (store) =>
-                    store.getAllKeys() as unknown as IDBRequest<
-                        readonly string[]
-                    >,
-            ),
+            performRequest<readonly string[]>((store) => store.getAllKeys()),
 
-        putBatch: (items) =>
-            withStore('readwrite', (store) => {
-                for (const item of items) store.put(item);
+        putBatch: <T>(items: readonly T[]) =>
+            performVoid((store) => {
+                for (const item of items) {
+                    store.put(item);
+                }
             }),
 
         clear: () =>
-            withStore('readwrite', (store) => {
+            performVoid((store) => {
                 store.clear();
             }),
 
-        clearAndPutBatch: (items) =>
-            withStore('readwrite', (store) => {
+        clearAndPutBatch: <T>(items: readonly T[]) =>
+            performVoid((store) => {
                 store.clear();
-                for (const item of items) store.put(item);
+                for (const item of items) {
+                    store.put(item);
+                }
             }),
 
-        deleteByKey: (key) =>
-            withStore('readwrite', (store) => {
+        deleteByKey: (key: string) =>
+            performVoid((store) => {
                 store.delete(key);
             }),
 
-        deleteBatch: (keys) =>
-            withStore('readwrite', (store) => {
+        deleteBatch: (keys: readonly string[]) =>
+            performVoid((store) => {
                 for (const key of keys) {
                     store.delete(key);
                 }
             }),
 
-        stream: async <T>(action: CursorAction<T>) => {
-            const db = await open();
+        stream: async <T>(action: CursorAction<T>): Promise<void> => {
+            const db = await openDB();
             const tx = db.transaction(config.storeName, 'readonly');
-            const request = tx.objectStore(config.storeName).openCursor();
-            request.onsuccess = () => {
-                const cursor = request.result;
-                if (!cursor) return;
-                if (action(cursor.value as T) !== false) cursor.continue();
+            const store = tx.objectStore(config.storeName);
+            const request = store.openCursor();
+
+            request.onsuccess = (event) => {
+                const target =
+                    event.target as IDBRequest<IDBCursorWithValue | null>;
+                const cursor = target.result;
+
+                if (cursor) {
+                    const shouldContinue = action(cursor.value as T);
+                    if (shouldContinue !== false) {
+                        cursor.continue();
+                    }
+                }
             };
-            return txAsPromise(tx);
+
+            return waitForTransaction(tx);
         },
     };
 };
