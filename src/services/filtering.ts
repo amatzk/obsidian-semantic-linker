@@ -1,6 +1,6 @@
 import ignore from 'ignore';
 import type { CachedMetadata, MetadataCache, TFile, Vault } from 'obsidian';
-import type { SettingParams } from 'types';
+import type { SettingParams } from '../types';
 
 export type TagSet = Set<string>;
 export type FileTagMap = Map<string, TagSet>;
@@ -116,13 +116,45 @@ export type ExclusionContext = {
 export class ExclusionService {
     private cachedMatcher: Predicate | null = null;
     private ctx: ExclusionContext;
+    private appliedPatterns: readonly string[] = [];
+    private appliedTags: readonly string[] = [];
 
     constructor(ctx: ExclusionContext) {
         this.ctx = ctx;
+        this.syncAppliedState();
     }
+
+    public syncAppliedState = (): void => {
+        const { excludePatterns, excludedTags } = this.ctx.settings();
+        this.appliedPatterns = [...excludePatterns];
+        this.appliedTags = [...excludedTags];
+        this.refresh();
+    };
 
     public refresh = (): void => {
         this.cachedMatcher = null;
+    };
+
+    public isDirty = (): boolean => {
+        const { excludePatterns, excludedTags } = this.ctx.settings();
+        return (
+            JSON.stringify(this.appliedPatterns) !==
+                JSON.stringify(excludePatterns) ||
+            JSON.stringify(this.appliedTags) !== JSON.stringify(excludedTags)
+        );
+    };
+
+    public wasExclusionReduced = (): boolean => {
+        const { excludePatterns, excludedTags } = this.ctx.settings();
+
+        const patternsReduced = this.appliedPatterns.some(
+            (p) => !excludePatterns.includes(p),
+        );
+        const tagsReduced = this.appliedTags.some(
+            (t) => !excludedTags.includes(t),
+        );
+
+        return patternsReduced || tagsReduced;
     };
 
     public isExcluded = (file: TFile): boolean => {
@@ -162,7 +194,6 @@ export class ExclusionService {
         return (file) => {
             const path = file.path;
             if (!path || path === '.') return false;
-            ig.ignores(path);
             return ig.ignores(path);
         };
     };

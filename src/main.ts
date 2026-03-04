@@ -67,7 +67,7 @@ export default class MainPlugin extends Plugin {
         );
     }
 
-    private initState = async (dbName: string) => {
+    private async initState(dbName: string) {
         const loadedData = (await this.loadData()) as SettingParams | null;
         this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData ?? {});
 
@@ -109,9 +109,9 @@ export default class MainPlugin extends Plugin {
             () => this.isTyping,
             () => this.events.trigger(EVENT_REFRESH_VIEWS),
         );
-    };
+    }
 
-    private registerMetadataEvents = () => {
+    private registerMetadataEvents() {
         this.registerEvent(
             this.app.metadataCache.on('changed', (file, _data, cache) => {
                 this.tagManager.updateFile(file, cache);
@@ -138,9 +138,9 @@ export default class MainPlugin extends Plugin {
                 }
             }),
         );
-    };
+    }
 
-    private registerInlineViews = () => {
+    private registerInlineViews() {
         this.app.workspace.onLayoutReady(() => {
             this.app.workspace.iterateAllLeaves((leaf) => {
                 if (leaf.view instanceof MarkdownView) {
@@ -160,9 +160,9 @@ export default class MainPlugin extends Plugin {
                 });
             }),
         );
-    };
+    }
 
-    private attachInlineView = (view: MarkdownView) => {
+    private attachInlineView(view: MarkdownView) {
         if (!this.settings.showInlineSimilarNotes) {
             return;
         }
@@ -174,9 +174,9 @@ export default class MainPlugin extends Plugin {
         const inlineView = new InlineSemanticView(view, this);
         this.inlineViews.set(view, inlineView);
         inlineView.load();
-    };
+    }
 
-    private registerCommands = () => {
+    private registerCommands() {
         this.addCommand({
             id: 'show-sidebar-view',
             name: 'Show sidebar view',
@@ -230,21 +230,16 @@ export default class MainPlugin extends Plugin {
             id: 'toggle-inline-view',
             name: 'Toggle inline view',
             callback: async () => {
-                this.settings.showInlineSimilarNotes =
-                    !this.settings.showInlineSimilarNotes;
-                await this.saveSettings();
+                const newValue = !this.settings.showInlineSimilarNotes;
+                await this.updateSettings({ showInlineSimilarNotes: newValue });
                 logger.info(
-                    `Inline similar notes ${
-                        this.settings.showInlineSimilarNotes
-                            ? 'enabled'
-                            : 'disabled'
-                    }`,
+                    `Inline similar notes ${newValue ? 'enabled' : 'disabled'}`,
                 );
             },
         });
-    };
+    }
 
-    private registerEditorEvents = () => {
+    private registerEditorEvents() {
         this.registerEvent(
             this.app.workspace.on('editor-change', () => {
                 this.isTyping = true;
@@ -259,9 +254,9 @@ export default class MainPlugin extends Plugin {
                 }, 1000);
             }),
         );
-    };
+    }
 
-    private registerVaultEvents = () => {
+    private registerVaultEvents() {
         this.registerEvent(
             this.app.vault.on('modify', (f) => {
                 if (f instanceof TFile && !this.isTyping) {
@@ -292,17 +287,22 @@ export default class MainPlugin extends Plugin {
                 }
             }),
         );
-    };
+    }
 
-    saveSettings = async () => {
+    async saveSettings() {
         await this.saveData(this.settings);
         this.ollamaService.reconfigure(this.settings.ollamaUrl);
         this.exclusionService.refresh();
         this.indexingService.reconfigureDebounce();
         this.refreshInlineViews();
-    };
+    }
 
-    private refreshInlineViews = () => {
+    async updateSettings(update: Partial<SettingParams>): Promise<void> {
+        Object.assign(this.settings, update);
+        await this.saveSettings();
+    }
+
+    private refreshInlineViews() {
         if (this.settings.showInlineSimilarNotes) {
             this.app.workspace.iterateAllLeaves((leaf) => {
                 if (leaf.view instanceof MarkdownView) {
@@ -320,9 +320,9 @@ export default class MainPlugin extends Plugin {
                 }
             });
         }
-    };
+    }
 
-    private openView = async () => {
+    private async openView() {
         const { workspace } = this.app;
         let leaf = workspace.getLeavesOfType(VIEW_TYPE_SEMANTIC_LINKER)[0];
 
@@ -339,7 +339,7 @@ export default class MainPlugin extends Plugin {
         }
 
         void workspace.revealLeaf(leaf);
-    };
+    }
 
     getLinkedFiles = (file: TFile): Set<string> => {
         const links = this.app.metadataCache.getFileCache(file)?.links ?? [];

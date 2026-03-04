@@ -151,7 +151,15 @@ export class IndexingService {
         await this.updateStats();
     };
 
-    public applyExclusion = async (): Promise<void> => {
+    public applyExclusion = async (): Promise<{
+        success: boolean;
+        needsReindex: boolean;
+    }> => {
+        if (!this.exclusion.isDirty()) {
+            return { success: false, needsReindex: false };
+        }
+
+        const needsReindex = this.exclusion.wasExclusionReduced();
         const currentStore = this.vector.getState();
         const toRemove: string[] = [];
 
@@ -169,6 +177,10 @@ export class IndexingService {
                 `Removed ${toRemove.length} excluded files from index.`,
             );
         }
+
+        this.exclusion.syncAppliedState();
+
+        return { success: true, needsReindex };
     };
 
     public reconfigureDebounce = (): void => {
