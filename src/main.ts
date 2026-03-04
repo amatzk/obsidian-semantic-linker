@@ -7,6 +7,7 @@ import {
     TFile,
     type WorkspaceLeaf,
 } from 'obsidian';
+import { ActiveSearchService } from 'services/active_search';
 import { ExclusionService, TagManager } from 'services/filtering';
 import { IndexingService } from 'services/indexing';
 import { OllamaService } from 'services/ollama';
@@ -21,10 +22,10 @@ import {
     VIEW_TYPE_SEMANTIC_LINKER,
 } from './constants';
 import type { SettingParams } from './types';
-import { InlineSemanticView } from './ui/inline_similar_view';
 import { SemanticSearchModal } from './ui/semantic_search_modal';
 import { SemanticLinkerSettingTab } from './ui/settings_tab';
-import { SimilarNotesView } from './ui/similar_notes_view';
+import { SimilarNotesInlineView } from './ui/similar_notes_inline';
+import { SimilarNotesSidebarView } from './ui/similar_notes_sidebar';
 
 export default class MainPlugin extends Plugin {
     settings: SettingParams = DEFAULT_SETTINGS;
@@ -34,12 +35,13 @@ export default class MainPlugin extends Plugin {
     exclusionService!: ExclusionService;
     indexingService!: IndexingService;
     vectorStoreService!: VectorStoreService;
+    activeSearchService!: ActiveSearchService;
 
     events = new Events();
 
     private isTyping = false;
     private typingTimer: ReturnType<typeof setTimeout> | null = null;
-    private inlineViews = new WeakMap<MarkdownView, InlineSemanticView>();
+    private inlineViews = new WeakMap<MarkdownView, SimilarNotesInlineView>();
 
     async onload() {
         let vaultIdentifier = this.app.vault.getName();
@@ -53,7 +55,7 @@ export default class MainPlugin extends Plugin {
 
         this.registerView(
             VIEW_TYPE_SEMANTIC_LINKER,
-            (leaf: WorkspaceLeaf) => new SimilarNotesView(leaf, this),
+            (leaf: WorkspaceLeaf) => new SimilarNotesSidebarView(leaf, this),
         );
         this.registerCommands();
         this.registerEditorEvents();
@@ -109,6 +111,9 @@ export default class MainPlugin extends Plugin {
             () => this.isTyping,
             () => this.events.trigger(EVENT_REFRESH_VIEWS),
         );
+
+        this.activeSearchService = new ActiveSearchService(this);
+        this.activeSearchService.initialize();
     }
 
     private registerMetadataEvents() {
@@ -171,7 +176,7 @@ export default class MainPlugin extends Plugin {
             return;
         }
 
-        const inlineView = new InlineSemanticView(view, this);
+        const inlineView = new SimilarNotesInlineView(view, this);
         this.inlineViews.set(view, inlineView);
         inlineView.load();
     }
