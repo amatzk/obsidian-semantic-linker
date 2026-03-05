@@ -12,6 +12,8 @@ export class SimilarNotesInlineView extends Component {
 
     private isCollapsed = false;
     private paddingObserver: MutationObserver | null = null;
+    private readingViewObserver: MutationObserver | null = null;
+    private editingViewObserver: MutationObserver | null = null;
 
     constructor(
         private readonly view: MarkdownView,
@@ -29,11 +31,14 @@ export class SimilarNotesInlineView extends Component {
 
     onload(): void {
         this.plugin.app.workspace.onLayoutReady(() => {
-            window.requestAnimationFrame(() => {
-                this.attachToView();
-                this.update();
-            });
+            this.attachToViewWhenReady();
         });
+
+        this.registerEvent(
+            this.plugin.app.workspace.on('file-open', () => {
+                this.attachToViewWhenReady();
+            }),
+        );
 
         this.registerEvent(
             this.plugin.activeSearchService.events.on(
@@ -44,7 +49,9 @@ export class SimilarNotesInlineView extends Component {
     }
 
     onunload(): void {
-        this.disconnectObserver();
+        this.disconnectReadingViewObserver();
+        this.disconnectEditingViewObserver();
+        this.disconnectPaddingObserver();
         this.readingContainerEl.remove();
         this.editingContainerEl.remove();
     }
@@ -71,23 +78,88 @@ export class SimilarNotesInlineView extends Component {
         return { container, content };
     };
 
-    private attachToView = (): void => {
-        const contentEl = this.view.contentEl;
+    private attachToViewWhenReady = (): void => {
+        this.disconnectReadingViewObserver();
+        this.disconnectEditingViewObserver();
+        this.attachReadingView();
+        this.attachEditingView();
+        this.update();
+    };
 
+    private attachReadingView = (): void => {
+        const contentEl = this.view.contentEl;
         const footer = contentEl.querySelector('.mod-footer');
-        if (footer && this.readingContainerEl.parentElement !== footer) {
-            footer.appendChild(this.readingContainerEl);
+
+        if (footer) {
+            if (this.readingContainerEl.parentElement !== footer) {
+                footer.appendChild(this.readingContainerEl);
+            }
+            return;
         }
 
+        if (this.readingViewObserver) return;
+        this.readingViewObserver = new MutationObserver(() => {
+            const footer = contentEl.querySelector('.mod-footer');
+            if (footer) {
+                this.disconnectReadingViewObserver();
+                if (this.readingContainerEl.parentElement !== footer) {
+                    footer.appendChild(this.readingContainerEl);
+                }
+                this.update();
+            }
+        });
+        this.readingViewObserver.observe(contentEl, {
+            childList: true,
+            subtree: true,
+        });
+    };
+
+    private disconnectReadingViewObserver = (): void => {
+        if (this.readingViewObserver) {
+            this.readingViewObserver.disconnect();
+            this.readingViewObserver = null;
+        }
+    };
+
+    private attachEditingView = (): void => {
+        const contentEl = this.view.contentEl;
         const cmSizer = contentEl.querySelector('.cm-sizer');
-        if (cmSizer && this.editingContainerEl.parentElement !== cmSizer) {
-            cmSizer.appendChild(this.editingContainerEl);
-            this.setupPaddingObserver();
+
+        if (cmSizer) {
+            if (this.editingContainerEl.parentElement !== cmSizer) {
+                cmSizer.appendChild(this.editingContainerEl);
+                this.setupPaddingObserver();
+            }
+            return;
+        }
+
+        if (this.editingViewObserver) return;
+        this.editingViewObserver = new MutationObserver(() => {
+            const sizer = contentEl.querySelector('.cm-sizer');
+            if (sizer && this.editingContainerEl.parentElement !== sizer) {
+                this.disconnectEditingViewObserver();
+                sizer.appendChild(this.editingContainerEl);
+                this.setupPaddingObserver();
+                if (!this.editingContainerEl.hidden) {
+                    this.editingContainerEl.show();
+                }
+            }
+        });
+        this.editingViewObserver.observe(contentEl, {
+            childList: true,
+            subtree: true,
+        });
+    };
+
+    private disconnectEditingViewObserver = (): void => {
+        if (this.editingViewObserver) {
+            this.editingViewObserver.disconnect();
+            this.editingViewObserver = null;
         }
     };
 
     private setupPaddingObserver = (): void => {
-        this.disconnectObserver();
+        this.disconnectPaddingObserver();
 
         const contentEl = this.view.contentEl;
         const cmContent = contentEl.querySelector('.cm-content');
@@ -114,7 +186,7 @@ export class SimilarNotesInlineView extends Component {
         this.syncPadding(cmContent);
     };
 
-    private disconnectObserver = (): void => {
+    private disconnectPaddingObserver = (): void => {
         if (this.paddingObserver) {
             this.paddingObserver.disconnect();
             this.paddingObserver = null;
@@ -130,6 +202,10 @@ export class SimilarNotesInlineView extends Component {
     };
 
     private update = (): void => {
+        if (this.readingViewObserver) {
+            return;
+        }
+
         const searchService = this.plugin.activeSearchService;
         const file = searchService.getAssociatedFile();
         const viewFile = this.view.file;
@@ -140,7 +216,8 @@ export class SimilarNotesInlineView extends Component {
             return;
         }
 
-        this.attachToView();
+        this.attachReadingView();
+        this.attachEditingView();
 
         const cmContent = this.view.contentEl.querySelector('.cm-content');
         if (cmContent instanceof HTMLElement) {

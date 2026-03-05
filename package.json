@@ -1,6 +1,6 @@
 {
     "name": "semantic-linker",
-    "version": "0.0.2",
+    "version": "0.0.3",
     "description": "Semantic Linker for Obsidian (https://obsidian.md)",
     "main": "main.js",
     "type": "module",
