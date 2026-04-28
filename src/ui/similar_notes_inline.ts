@@ -202,10 +202,6 @@ export class SimilarNotesInlineView extends Component {
     };
 
     private update = async (): Promise<void> => {
-        if (this.readingViewObserver) {
-            return;
-        }
-
         const searchService = this.plugin.activeSearchService;
         const viewFile = this.view.file;
 
