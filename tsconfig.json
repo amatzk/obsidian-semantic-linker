@@ -1,6 +1,8 @@
 {
     "compilerOptions": {
-        "baseUrl": "src",
+        "paths": {
+            "*": ["./src/*"]
+        },
         "inlineSourceMap": true,
         "inlineSources": true,
         "module": "ESNext",
@@ -9,7 +11,7 @@
         "noImplicitAny": true,
         "noImplicitThis": true,
         "noImplicitReturns": true,
-        "moduleResolution": "node",
+        "moduleResolution": "bundler",
         "importHelpers": true,
         "noUncheckedIndexedAccess": true,
         "isolatedModules": true,
