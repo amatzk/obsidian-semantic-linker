@@ -60,7 +60,7 @@ export class SimilarNotesInlineView extends Component {
         container: HTMLElement;
         content: HTMLElement;
     } => {
-        const container = document.createElement('div');
+        const container = createDiv();
         container.addClasses([
             'semantic-linker-inline-container',
             'border-t',
@@ -197,6 +197,7 @@ export class SimilarNotesInlineView extends Component {
         const paddingBottom = cmContent.style.paddingBottom;
         if (paddingBottom && paddingBottom !== '0px') {
             this.editingContainerEl.style.paddingBottom = paddingBottom;
+            // eslint-disable-next-line obsidianmd/no-static-styles-assignment
             cmContent.setCssProps({ 'padding-bottom': '0px' });
         }
     };

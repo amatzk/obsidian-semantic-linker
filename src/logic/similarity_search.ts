@@ -38,7 +38,7 @@ const yieldToMain = (): Promise<void> => {
             channel.port2.postMessage(null);
         });
     }
-    return new Promise((resolve) => setTimeout(resolve, 0));
+    return new Promise((resolve) => activeWindow.setTimeout(resolve, 0));
 };
 
 const calculateDotProduct = (a: Vector, b: Vector): number => {

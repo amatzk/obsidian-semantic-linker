@@ -147,7 +147,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
             .querySelector('.setting-item-description-spec')
             ?.remove();
 
-        setting.descEl.createEl('div', {
+        setting.descEl.createDiv({
             text: `Context length: ${contextLength} tokens`,
             cls: 'setting-item-description-spec text-[0.85em] text-[var(--text-muted)] mt-1',
         });

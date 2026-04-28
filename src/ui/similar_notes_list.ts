@@ -60,7 +60,7 @@ export const animatePreview = (
             'pointer-events-auto',
         );
         element.addClass('opacity-0', '-translate-y-1', 'pointer-events-none');
-        setTimeout(() => {
+        activeWindow.setTimeout(() => {
             if (element.hasClass('opacity-0')) {
                 element.addClass('hidden');
                 element.setCssProps({ display: 'none' });

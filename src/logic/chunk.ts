@@ -97,7 +97,9 @@ const Utils: UtilsType = {
                     channel.port2.postMessage(null);
                 });
             } else {
-                await new Promise((resolve) => setTimeout(resolve, 0));
+                await new Promise((resolve) =>
+                    activeWindow.setTimeout(resolve, 0),
+                );
             }
         }
     },
@@ -150,7 +152,7 @@ const createMarkdownEngine = (): MarkdownEngine => {
     return {
         update: (text) => {
             const match = text.match(headerRegex);
-            if (!match || !match[1]) return;
+            if (!match?.[1]) return;
 
             const depth = match[1].length;
             const content = (match[2] || '').trim();

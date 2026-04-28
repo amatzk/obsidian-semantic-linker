@@ -20,7 +20,7 @@ const parseOpenAction = (evt: MouseEvent | KeyboardEvent): OpenAction => {
 };
 
 const wait = (ms: number): Promise<void> =>
-    new Promise((resolve) => setTimeout(resolve, ms));
+    new Promise((resolve) => activeWindow.setTimeout(resolve, ms));
 
 const getTargetLeaf = (app: App, action: OpenAction): WorkspaceLeaf => {
     switch (action) {

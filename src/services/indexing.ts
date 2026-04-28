@@ -505,7 +505,7 @@ export class IndexingService {
                 channel.port2.postMessage(null);
             });
         }
-        return new Promise((resolve) => setTimeout(resolve, 0));
+        return new Promise((resolve) => activeWindow.setTimeout(resolve, 0));
     };
 
     private updateNotice = (notice: Notice, p: IndexProgress): void => {

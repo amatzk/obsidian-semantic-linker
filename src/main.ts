@@ -71,7 +71,7 @@ export default class MainPlugin extends Plugin {
 
     onunload() {
         if (this.typingTimer) {
-            clearTimeout(this.typingTimer);
+            activeWindow.clearTimeout(this.typingTimer);
             this.typingTimer = null;
         }
 
@@ -267,10 +267,10 @@ export default class MainPlugin extends Plugin {
                 this.isTyping = true;
 
                 if (this.typingTimer) {
-                    clearTimeout(this.typingTimer);
+                    activeWindow.clearTimeout(this.typingTimer);
                 }
 
-                this.typingTimer = setTimeout(() => {
+                this.typingTimer = activeWindow.setTimeout(() => {
                     this.isTyping = false;
                     this.typingTimer = null;
                 }, 1000);
