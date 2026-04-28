@@ -19,21 +19,21 @@
     },
     "keywords": [],
     "devDependencies": {
-        "@biomejs/biome": "2.4.6",
-        "@tailwindcss/cli": "^4.2.1",
-        "@types/node": "^25.3.5",
-        "esbuild": "0.27.3",
-        "eslint": "^10.0.2",
-        "eslint-plugin-obsidianmd": "^0.1.9",
-        "globals": "^17.4.0",
+        "@biomejs/biome": "2.4.13",
+        "@tailwindcss/cli": "^4.2.4",
+        "@types/node": "^25.6.0",
+        "esbuild": "0.28.0",
+        "eslint": "^10.2.1",
+        "eslint-plugin-obsidianmd": "^0.2.8",
+        "globals": "^17.5.0",
         "ignore": "^7.0.5",
         "jiti": "2.6.1",
         "js-tiktoken": "^1.0.21",
         "ollama": "^0.6.3",
-        "tailwindcss": "^4.2.1",
+        "tailwindcss": "^4.2.4",
         "tslib": "2.8.1",
-        "typescript": "^5.9.3",
-        "typescript-eslint": "8.56.1"
+        "typescript": "^6.0.3",
+        "typescript-eslint": "8.59.1"
     },
     "dependencies": {
         "obsidian": "latest"
