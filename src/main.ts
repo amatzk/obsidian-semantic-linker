@@ -69,6 +69,23 @@ export default class MainPlugin extends Plugin {
         );
     }
 
+    onunload() {
+        if (this.typingTimer) {
+            clearTimeout(this.typingTimer);
+            this.typingTimer = null;
+        }
+
+        this.app.workspace.iterateAllLeaves((leaf) => {
+            if (leaf.view instanceof MarkdownView) {
+                const inlineView = this.inlineViews.get(leaf.view);
+                if (inlineView) {
+                    inlineView.unload();
+                    this.inlineViews.delete(leaf.view);
+                }
+            }
+        });
+    }
+
     private async initState(dbName: string) {
         const loadedData = (await this.loadData()) as SettingParams | null;
         this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData ?? {});

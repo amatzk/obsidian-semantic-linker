@@ -396,20 +396,28 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
                 btn.setButtonText('Apply')
                     .setTooltip('Remove matched files from the index')
                     .onClick(async () => {
-                        const result =
-                            await this.plugin.indexingService.applyExclusion();
+                        btn.setButtonText('Applying...').setDisabled(true);
+                        try {
+                            const result =
+                                await this.plugin.indexingService.applyExclusion();
 
-                        if (!result.success) {
-                            logger.info('No changes to apply.');
-                            return;
-                        }
+                            if (!result.success) {
+                                logger.info('No changes to apply.');
+                                return;
+                            }
 
-                        logger.info('Exclusion settings applied to the index.');
-
-                        if (result.needsReindex) {
-                            await this.plugin.indexingService.runFullIndex(
-                                false,
+                            logger.info(
+                                'Exclusion settings applied to the index.',
                             );
+
+                            if (result.needsReindex) {
+                                await this.plugin.indexingService.runFullIndex(
+                                    false,
+                                );
+                            }
+                        } finally {
+                            btn.setButtonText('Apply').setDisabled(false);
+                            this.display();
                         }
                     });
                 btn.buttonEl.addClass('transition-all', 'duration-200');

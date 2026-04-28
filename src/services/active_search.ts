@@ -107,7 +107,7 @@ export class ActiveSearchService {
         this.events.trigger(EVENT_RESULTS_UPDATED);
     };
 
-    private readonly searchByFile = async (
+    public readonly searchByFile = async (
         file: TFile,
     ): Promise<readonly SemanticSearchResult[]> => {
         const store = this.plugin.vectorStoreService?.getState();

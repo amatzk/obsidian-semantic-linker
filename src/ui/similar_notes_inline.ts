@@ -43,7 +43,7 @@ export class SimilarNotesInlineView extends Component {
         this.registerEvent(
             this.plugin.activeSearchService.events.on(
                 EVENT_RESULTS_UPDATED,
-                () => this.update(),
+                () => void this.update(),
             ),
         );
     }
@@ -83,7 +83,7 @@ export class SimilarNotesInlineView extends Component {
         this.disconnectEditingViewObserver();
         this.attachReadingView();
         this.attachEditingView();
-        this.update();
+        void this.update();
     };
 
     private attachReadingView = (): void => {
@@ -105,7 +105,7 @@ export class SimilarNotesInlineView extends Component {
                 if (this.readingContainerEl.parentElement !== footer) {
                     footer.appendChild(this.readingContainerEl);
                 }
-                this.update();
+                void this.update();
             }
         });
         this.readingViewObserver.observe(contentEl, {
@@ -201,16 +201,15 @@ export class SimilarNotesInlineView extends Component {
         }
     };
 
-    private update = (): void => {
+    private update = async (): Promise<void> => {
         if (this.readingViewObserver) {
             return;
         }
 
         const searchService = this.plugin.activeSearchService;
-        const file = searchService.getAssociatedFile();
         const viewFile = this.view.file;
 
-        if (!file || !viewFile || file.path !== viewFile.path) {
+        if (!viewFile) {
             this.readingContainerEl.hide();
             this.editingContainerEl.hide();
             return;
@@ -224,15 +223,15 @@ export class SimilarNotesInlineView extends Component {
             this.syncPadding(cmContent);
         }
 
-        if (searchService.getIsExcluded()) {
+        if (this.plugin.exclusionService.isExcluded(viewFile)) {
             this.readingContainerEl.hide();
             this.editingContainerEl.hide();
             return;
         }
 
-        const results = searchService.getLatestResults();
-        this.renderToContainer(this.readingContentEl, results, file);
-        this.renderToContainer(this.editingContentEl, results, file);
+        const results = await searchService.searchByFile(viewFile);
+        this.renderToContainer(this.readingContentEl, results, viewFile);
+        this.renderToContainer(this.editingContentEl, results, viewFile);
 
         this.readingContainerEl.show();
         this.editingContainerEl.show();
