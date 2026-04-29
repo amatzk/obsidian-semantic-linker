@@ -1,5 +1,11 @@
 import { searchSimilar } from 'logic/similarity_search';
-import { type App, SuggestModal, TFile, type WorkspaceLeaf } from 'obsidian';
+import {
+    type App,
+    type OpenViewState,
+    SuggestModal,
+    TFile,
+    type WorkspaceLeaf,
+} from 'obsidian';
 import type MainPlugin from '../main';
 import { logger } from '../shared/notify';
 import { formatPercent, getTitleFromPath } from '../shared/utils';
@@ -9,7 +15,6 @@ type OpenAction = 'current' | 'tab' | 'split';
 
 type SearchState = {
     lastQuery: string;
-    isSearching: boolean;
 };
 
 const parseOpenAction = (evt: MouseEvent | KeyboardEvent): OpenAction => {
@@ -32,6 +37,13 @@ const getTargetLeaf = (app: App, action: OpenAction): WorkspaceLeaf => {
             return app.workspace.getLeaf(false);
     }
 };
+
+const createOpenState = (
+    result: SemanticSearchResult,
+): OpenViewState | undefined =>
+    result.startLine !== undefined
+        ? { eState: { line: result.startLine } }
+        : undefined;
 
 const renderItem = (result: SemanticSearchResult, el: HTMLElement): void => {
     el.addClass('suggestion-item-layout');
@@ -57,7 +69,6 @@ const renderItem = (result: SemanticSearchResult, el: HTMLElement): void => {
 export class SemanticSearchModal extends SuggestModal<SemanticSearchResult> {
     private readonly state: SearchState = {
         lastQuery: '',
-        isSearching: false,
     };
 
     constructor(
@@ -90,19 +101,19 @@ export class SemanticSearchModal extends SuggestModal<SemanticSearchResult> {
     };
 
     async getSuggestions(query: string): Promise<SemanticSearchResult[]> {
-        this.state.lastQuery = query;
+        const trimmedQuery = query.trim();
+        this.state.lastQuery = trimmedQuery;
 
         const minLen = this.plugin.settings.minQueryLength;
-        if (query.length < minLen) {
-            this.state.isSearching = false;
+        if (trimmedQuery.length < minLen) {
+            this.setPlaceholder('Semantic search');
             return [];
         }
 
         await wait(this.plugin.settings.searchDebounceTime);
-        if (this.state.lastQuery !== query) return [];
+        if (this.state.lastQuery !== trimmedQuery) return [];
 
-        this.state.isSearching = true;
-        this.setPlaceholder(`Searching for "${query}"...`);
+        this.setPlaceholder(`Searching for "${trimmedQuery}"...`);
 
         const indexingService = this.plugin.indexingService;
         const vectorStore = this.plugin.vectorStoreService;
@@ -112,10 +123,9 @@ export class SemanticSearchModal extends SuggestModal<SemanticSearchResult> {
             return [];
         }
 
-        const vectorRes = await indexingService.getEmbeddings(query);
+        const vectorRes = await indexingService.getEmbeddings(trimmedQuery);
 
-        if (this.state.lastQuery !== query) return [];
-        this.state.isSearching = false;
+        if (this.state.lastQuery !== trimmedQuery) return [];
 
         if (!vectorRes.ok) {
             this.setPlaceholder(`Error: ${vectorRes.error}`);
@@ -133,7 +143,7 @@ export class SemanticSearchModal extends SuggestModal<SemanticSearchResult> {
 
         this.setPlaceholder(
             results.length === 0
-                ? `No matches for "${query}"`
+                ? `No matches for "${trimmedQuery}"`
                 : 'Semantic search',
         );
         return results;
@@ -157,9 +167,9 @@ export class SemanticSearchModal extends SuggestModal<SemanticSearchResult> {
         const action = parseOpenAction(evt);
         const leaf = getTargetLeaf(this.app, action);
 
-        void leaf.openFile(file);
+        void leaf.openFile(file, createOpenState(result));
 
-        logger.errorLog(
+        logger.debug(
             `Opened search result: ${result.path} (Score: ${result.similarity})`,
         );
     }

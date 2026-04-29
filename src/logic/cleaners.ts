@@ -2,13 +2,13 @@ export type CleaningStrategy = 'preview' | 'semantic' | 'frontmatter';
 
 const RegexPatterns = {
     // Structure
-    Frontmatter: /^---\n[\s\S]*?\n---\n/g,
+    Frontmatter: /^---\r?\n[\s\S]*?\r?\n---\r?\n/g,
     ExcessiveNewlines: /\n{2,}/g,
     ExcessiveSpaces: /[ \t]{2,}/g,
     TrailingSpaces: /[ \t]+$/gm,
 
     // Protection targets
-    CodeBlock: /```[\s\S]*?```/g,
+    CodeBlock: /(```|~~~)[\s\S]*?\1/g,
     CodeInline: /`[^`\n]+`/g,
     MathBlock: /\$\$[\s\S]*?\$\$/g,
     MathInline: /(?<!\\)\$[^$\n]+\$/g,
@@ -16,8 +16,8 @@ const RegexPatterns = {
     // Obsidian
     ObsidianComment: /%%[\s\S]*?%%/g,
     InternalEmbed: /!\[\[/g,
-    InternalLinkAlias: /\[\[(?:.*\|)(.*?)\]\]/g,
-    InternalLinkHeader: /\[\[(.*?)\]\]/g,
+    InternalLinkAlias: /\[\[(?:[^\]]*?\|)(.*?)\]\]/g,
+    InternalLinkHeader: /\[\[([^\]]*?)\]\]/g,
     HeaderOrBlockId: /[#^]/g,
 
     // Markdown
@@ -40,8 +40,8 @@ type PlaceholderManager = {
 
 const createPlaceholderManager = (): PlaceholderManager => {
     const items: string[] = [];
-    const prefix = '__PROTECTED_';
-    const suffix = '__';
+    const prefix = 'SLPROTECTEDTOKEN';
+    const suffix = 'SL';
 
     return {
         protect: (text, pattern) =>

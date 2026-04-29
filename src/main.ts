@@ -3,7 +3,6 @@ import {
     FileSystemAdapter,
     MarkdownView,
     Plugin,
-    TAbstractFile,
     TFile,
     type WorkspaceLeaf,
 } from 'obsidian';
@@ -21,6 +20,7 @@ import {
     EVENT_REFRESH_VIEWS,
     VIEW_TYPE_SEMANTIC_LINKER,
 } from './constants';
+import { normalizeSettings } from './settings';
 import type { SettingParams } from './types';
 import { SemanticSearchModal } from './ui/semantic_search_modal';
 import { SemanticLinkerSettingTab } from './ui/settings_tab';
@@ -41,7 +41,7 @@ export default class MainPlugin extends Plugin {
 
     private isTyping = false;
     private typingTimer: ReturnType<typeof setTimeout> | null = null;
-    private inlineViews = new WeakMap<MarkdownView, SimilarNotesInlineView>();
+    private inlineViews = new Map<MarkdownView, SimilarNotesInlineView>();
 
     async onload() {
         let vaultIdentifier = this.app.vault.getName();
@@ -70,25 +70,21 @@ export default class MainPlugin extends Plugin {
     }
 
     onunload() {
+        this.indexingService?.dispose();
+
         if (this.typingTimer) {
             activeWindow.clearTimeout(this.typingTimer);
             this.typingTimer = null;
         }
 
-        this.app.workspace.iterateAllLeaves((leaf) => {
-            if (leaf.view instanceof MarkdownView) {
-                const inlineView = this.inlineViews.get(leaf.view);
-                if (inlineView) {
-                    inlineView.unload();
-                    this.inlineViews.delete(leaf.view);
-                }
-            }
-        });
+        for (const inlineView of this.inlineViews.values()) {
+            inlineView.unload();
+        }
+        this.inlineViews.clear();
     }
 
     private async initState(dbName: string) {
-        const loadedData = (await this.loadData()) as SettingParams | null;
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData ?? {});
+        this.settings = normalizeSettings(await this.loadData());
 
         this.ollamaService = new OllamaService(this.settings.ollamaUrl);
         void this.ollamaService.fetchModels().then((result) => {
@@ -141,47 +137,40 @@ export default class MainPlugin extends Plugin {
         );
 
         this.registerEvent(
-            this.app.metadataCache.on('deleted', (fileOrPath) => {
-                const path =
-                    fileOrPath instanceof TAbstractFile
-                        ? fileOrPath.path
-                        : fileOrPath;
-
-                if (typeof path === 'string') {
-                    this.tagManager.removeFile(path);
-                }
-            }),
-        );
-
-        this.registerEvent(
-            this.app.vault.on('rename', (file, oldPath) => {
-                if (file instanceof TFile) {
-                    this.tagManager.renameFile(oldPath, file.path);
-                }
+            this.app.metadataCache.on('deleted', (file) => {
+                this.tagManager.removeFile(file.path);
             }),
         );
     }
 
     private registerInlineViews() {
         this.app.workspace.onLayoutReady(() => {
-            this.app.workspace.iterateAllLeaves((leaf) => {
-                if (leaf.view instanceof MarkdownView) {
-                    this.attachInlineView(leaf.view);
-                }
-            });
+            this.syncInlineViews();
         });
 
         this.registerEvent(
             this.app.workspace.on('layout-change', () => {
-                this.app.workspace.iterateAllLeaves((leaf) => {
-                    if (leaf.view instanceof MarkdownView) {
-                        if (!this.inlineViews.has(leaf.view)) {
-                            this.attachInlineView(leaf.view);
-                        }
-                    }
-                });
+                this.syncInlineViews();
             }),
         );
+    }
+
+    private syncInlineViews() {
+        const openViews = new Set<MarkdownView>();
+
+        this.app.workspace.iterateAllLeaves((leaf) => {
+            if (leaf.view instanceof MarkdownView) {
+                openViews.add(leaf.view);
+                this.attachInlineView(leaf.view);
+            }
+        });
+
+        for (const [view, inlineView] of this.inlineViews) {
+            if (!this.settings.showInlineSimilarNotes || !openViews.has(view)) {
+                inlineView.unload();
+                this.inlineViews.delete(view);
+            }
+        }
     }
 
     private attachInlineView(view: MarkdownView) {
@@ -281,7 +270,7 @@ export default class MainPlugin extends Plugin {
     private registerVaultEvents() {
         this.registerEvent(
             this.app.vault.on('modify', (f) => {
-                if (f instanceof TFile && !this.isTyping) {
+                if (f instanceof TFile) {
                     this.indexingService.queueAutoIndex(f);
                 }
             }),
@@ -317,48 +306,28 @@ export default class MainPlugin extends Plugin {
         this.exclusionService.refresh();
         this.indexingService.reconfigureDebounce();
         this.refreshInlineViews();
+        this.events.trigger(EVENT_REFRESH_VIEWS);
     }
 
     async updateSettings(update: Partial<SettingParams>): Promise<void> {
-        Object.assign(this.settings, update);
+        this.settings = normalizeSettings({ ...this.settings, ...update });
         await this.saveSettings();
     }
 
     private refreshInlineViews() {
-        if (this.settings.showInlineSimilarNotes) {
-            this.app.workspace.iterateAllLeaves((leaf) => {
-                if (leaf.view instanceof MarkdownView) {
-                    this.attachInlineView(leaf.view);
-                }
-            });
-        } else {
-            this.app.workspace.iterateAllLeaves((leaf) => {
-                if (leaf.view instanceof MarkdownView) {
-                    const inlineView = this.inlineViews.get(leaf.view);
-                    if (inlineView) {
-                        inlineView.unload();
-                        this.inlineViews.delete(leaf.view);
-                    }
-                }
-            });
-        }
+        this.syncInlineViews();
     }
 
     private async openView() {
         const { workspace } = this.app;
-        let leaf = workspace.getLeavesOfType(VIEW_TYPE_SEMANTIC_LINKER)[0];
-
-        if (!leaf) {
-            const newLeaf = workspace.getRightLeaf(false);
-            if (!newLeaf) {
-                return;
-            }
-            leaf = newLeaf;
-            await leaf.setViewState({
-                type: VIEW_TYPE_SEMANTIC_LINKER,
+        const leaf = await workspace.ensureSideLeaf(
+            VIEW_TYPE_SEMANTIC_LINKER,
+            'right',
+            {
                 active: true,
-            });
-        }
+                reveal: true,
+            },
+        );
 
         void workspace.revealLeaf(leaf);
     }

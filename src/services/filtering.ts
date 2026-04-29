@@ -6,7 +6,14 @@ export type TagSet = Set<string>;
 export type FileTagMap = Map<string, TagSet>;
 export type Predicate = (file: TFile) => boolean;
 
-const normalizeTag = (tag: string): string => tag.replace(/^#/, '');
+const normalizeTag = (tag: string): string =>
+    tag.replace(/^#/, '').trim().toLowerCase();
+
+const splitTagValue = (tag: string): readonly string[] =>
+    tag
+        .split(/[,\s]+/)
+        .map(normalizeTag)
+        .filter((value) => value.length > 0);
 
 const getFrontmatterTagArray = (
     fm: NonNullable<CachedMetadata['frontmatter']>,
@@ -22,7 +29,7 @@ const getFrontmatterTagArray = (
 
     for (const item of rawArray) {
         if (typeof item === 'string' || typeof item === 'number') {
-            result.push(String(item));
+            result.push(...splitTagValue(String(item)));
         }
     }
     return result;
@@ -39,7 +46,9 @@ const extractTags = (cache: CachedMetadata): TagSet => {
 
     if (cache.tags) {
         for (const t of cache.tags) {
-            tags.add(normalizeTag(t.tag));
+            for (const tag of splitTagValue(t.tag)) {
+                tags.add(tag);
+            }
         }
     }
 
@@ -68,6 +77,7 @@ export class TagManager {
         if (tags) {
             this.fileTagMap.set(newPath, tags);
             this.fileTagMap.delete(oldPath);
+            this.isCacheDirty = true;
         }
     };
 
@@ -173,7 +183,15 @@ export class ExclusionService {
             return false;
         }
 
-        return excludedTags.some((tag) => fileTags.has(tag));
+        return excludedTags.some((tag) => {
+            const normalized = normalizeTag(tag);
+            return (
+                fileTags.has(normalized) ||
+                Array.from(fileTags).some((fileTag) =>
+                    fileTag.startsWith(`${normalized}/`),
+                )
+            );
+        });
     };
 
     private getMatcher = (): Predicate => {
@@ -189,7 +207,9 @@ export class ExclusionService {
             return () => false;
         }
 
-        const ig = ignore().add([...patterns]);
+        const ig = ignore().add(
+            patterns.map((pattern) => pattern.trim()).filter(Boolean),
+        );
 
         return (file) => {
             const path = file.path;

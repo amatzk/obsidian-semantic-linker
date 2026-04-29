@@ -59,10 +59,23 @@ const calculateDotProduct = (a: Vector, b: Vector): number => {
 const computeAveragePooling = (
     query: SearchQuery,
     entry: EmbeddedNote,
-): ScoredChunk => ({
-    score: calculateDotProduct(query.avg, entry.avgEmbedding),
-    chunk: entry.chunks[0] ?? null,
-});
+): ScoredChunk => {
+    let bestChunk: EmbeddedChunk | null = null;
+    let bestScore = INITIAL_MIN_SCORE;
+
+    for (const chunk of entry.chunks) {
+        const score = calculateDotProduct(query.avg, chunk.embedding);
+        if (score > bestScore) {
+            bestScore = score;
+            bestChunk = chunk;
+        }
+    }
+
+    return {
+        score: calculateDotProduct(query.avg, entry.avgEmbedding),
+        chunk: bestChunk,
+    };
+};
 
 const computeMaxSim = (
     query: SearchQuery,

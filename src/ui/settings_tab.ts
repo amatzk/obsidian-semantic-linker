@@ -20,6 +20,16 @@ const getButtonState = (isIndexing: boolean): ButtonState => {
     return { type: 'stop', disabled: false };
 };
 
+const getIndexButtonState = (plugin: MainPlugin): ButtonState => {
+    if (!plugin.indexingService.isBusy()) {
+        return { type: 'reindex', disabled: false };
+    }
+    if (plugin.indexingService.isStopping()) {
+        return { type: 'stopping', disabled: true };
+    }
+    return getButtonState(true);
+};
+
 const parseIntOr = (value: string, fallback: number): number => {
     const parsed = parseInt(value, 10);
     return Number.isNaN(parsed) ? fallback : parsed;
@@ -98,8 +108,12 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
         if (models.length > 0) {
             this.populateModelDropdown(d, models);
         } else {
+            const current = this.plugin.settings.ollamaModel;
+            if (current) {
+                d.addOption(current, `${current} (saved)`);
+            }
             d.addOption('', 'No models found (check connection)');
-            d.setDisabled(true);
+            d.setValue(current);
         }
     };
 
@@ -120,22 +134,24 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
         }
 
         dropdown.setValue(current).onChange((val) => {
-            void this.plugin
-                .updateSettings({ ollamaModel: val })
-                .then(async () => {
-                    const res =
-                        await this.plugin.ollamaService.getModelMetadata(val);
-                    if (res.ok) {
-                        await this.plugin.statusService.update({
-                            modelContextLength: res.value.contextLength,
-                        });
-                        logger.info(
-                            `Model profile updated: ${val} (Context: ${res.value.contextLength})`,
-                        );
-                        this.display();
-                    }
-                });
+            void this.updateModelSelection(val);
         });
+    };
+
+    private updateModelSelection = async (model: string): Promise<void> => {
+        await this.plugin.updateSettings({ ollamaModel: model });
+        if (!model) return;
+
+        const res = await this.plugin.ollamaService.getModelMetadata(model);
+        if (res.ok) {
+            await this.plugin.statusService.update({
+                modelContextLength: res.value.contextLength,
+            });
+            logger.info(
+                `Model profile updated: ${model} (Context: ${res.value.contextLength})`,
+            );
+            this.display();
+        }
     };
 
     private renderModelMetadata = (setting: Setting) => {
@@ -197,7 +213,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
     };
 
     private attachReindexButton = (setting: Setting) => {
-        const state = getButtonState(this.plugin.indexingService.isBusy());
+        const state = getIndexButtonState(this.plugin);
 
         setting.addButton((btn) => {
             switch (state.type) {
@@ -313,7 +329,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
             if (matched.length === 0) return;
 
             const scrollBox = previewListEl.createDiv({
-                cls: 'max-h-60 overflow-y-auto border border-[var(--background-modifier-border)] rounded-sm bg-(--background-primary-alt) p-1',
+                cls: 'max-h-60 overflow-y-auto border border-[var(--background-modifier-border)] rounded-sm bg-[var(--background-primary-alt)] p-1',
             });
 
             for (const file of matched) {
@@ -544,7 +560,7 @@ export class SemanticLinkerSettingTab extends PluginSettingTab {
                         .setValue(
                             this.plugin.settings.searchDebounceTime.toString(),
                         )
-                        .onChange(async (val) => {
+                        .onChange((val) => {
                             const num = parseIntOr(
                                 val,
                                 this.plugin.settings.searchDebounceTime,

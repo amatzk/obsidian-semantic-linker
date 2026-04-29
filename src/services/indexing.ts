@@ -1,6 +1,12 @@
 import { createChunks } from 'logic/chunk';
 import { cleanText } from 'logic/cleaners';
-import { debounce, type Notice, TFile, type Vault } from 'obsidian';
+import {
+    type Debouncer,
+    debounce,
+    type Notice,
+    TFile,
+    type Vault,
+} from 'obsidian';
 import { logger } from '../shared/notify';
 import { getTitleFromPath } from '../shared/utils';
 import type {
@@ -30,6 +36,16 @@ type IndexProgress = {
     readonly currentFile: string;
 };
 
+type IndexedFileResult = {
+    readonly file: TFile;
+    readonly result: Result<VectorStoreBatchItem>;
+};
+
+type BatchPartition = {
+    readonly validItems: readonly VectorStoreBatchItem[];
+    readonly emptyPaths: readonly string[];
+};
+
 type TryEmbedResult =
     | { success: true; result: DocumentEmbeddingResult }
     | {
@@ -41,7 +57,7 @@ type TryEmbedResult =
 export class IndexingService {
     private active = false;
     private stopping = false;
-    private autoIndexFn: ((file: TFile) => void) | null = null;
+    private autoIndexFn: Debouncer<[TFile], void> | null = null;
 
     constructor(
         private vault: Vault,
@@ -58,12 +74,29 @@ export class IndexingService {
         return this.active;
     };
 
+    public isStopping = (): boolean => {
+        return this.stopping;
+    };
+
     public stop = (): void => {
         this.stopping = true;
+        this.ollama.abort();
+    };
+
+    public dispose = (): void => {
+        this.autoIndexFn?.cancel();
+        this.autoIndexFn = null;
+        this.ollama.abort();
     };
 
     public runFullIndex = async (force = false): Promise<void> => {
         if (this.active) return;
+
+        const ready = this.validateEmbeddingSettings();
+        if (!ready.ok) {
+            logger.warn(ready.error);
+            return;
+        }
 
         const files = this.getFilesToIndex(force);
 
@@ -103,20 +136,62 @@ export class IndexingService {
     ): Promise<void> => {
         if (file.extension !== 'md') return;
 
-        const result = await this.createEmbeddingForFile(file);
+        if (await this.removeExcludedFile(file, showNotice)) return;
+        if (!this.ensureEmbeddingSettings(showNotice)) return;
 
-        if (result.ok) {
-            if (result.value.chunks.length > 0) {
-                await this.vector.commitUpsert(
-                    file,
-                    result.value.chunks,
-                    result.value.avgEmbedding,
-                );
-                await this.updateStats();
-                if (showNotice) logger.info(`Indexed: ${file.basename}`);
-            }
-        } else {
+        const result = await this.createEmbeddingForFile(file);
+        if (!result.ok) {
             logger.errorLog(`Failed to index ${file.path}: ${result.error}`);
+            return;
+        }
+
+        await this.commitSingleFileResult(file, result.value, showNotice);
+    };
+
+    private removeExcludedFile = async (
+        file: TFile,
+        showNotice: boolean,
+    ): Promise<boolean> => {
+        if (!this.exclusion.isExcluded(file)) {
+            return false;
+        }
+
+        await this.vector.commitRemove(file.path);
+        await this.updateStats();
+        if (showNotice) {
+            logger.info(`Skipped excluded file: ${file.basename}`);
+        }
+        return true;
+    };
+
+    private ensureEmbeddingSettings = (showNotice: boolean): boolean => {
+        const ready = this.validateEmbeddingSettings();
+        if (ready.ok) return true;
+
+        if (showNotice) logger.warn(ready.error);
+        return false;
+    };
+
+    private commitSingleFileResult = async (
+        file: TFile,
+        item: VectorStoreBatchItem,
+        showNotice: boolean,
+    ): Promise<void> => {
+        if (item.chunks.length > 0) {
+            await this.vector.commitUpsert(
+                file,
+                item.chunks,
+                item.avgEmbedding,
+            );
+            await this.updateStats();
+            if (showNotice) logger.info(`Indexed: ${file.basename}`);
+            return;
+        }
+
+        await this.vector.commitRemove(file.path);
+        await this.updateStats();
+        if (showNotice) {
+            logger.info(`Removed empty file from index: ${file.basename}`);
         }
     };
 
@@ -184,6 +259,7 @@ export class IndexingService {
     };
 
     public reconfigureDebounce = (): void => {
+        this.autoIndexFn?.cancel();
         this.autoIndexFn = null;
     };
 
@@ -211,6 +287,17 @@ export class IndexingService {
             lastModelUsed: settings.ollamaModel,
         });
         this.onIndexFinished();
+    };
+
+    private validateEmbeddingSettings = (): Result<void> => {
+        if (this.getSettings().ollamaModel.trim().length === 0) {
+            return {
+                ok: false,
+                error: 'Select an Ollama embedding model in Semantic Linker settings.',
+            };
+        }
+
+        return { ok: true, value: undefined };
     };
 
     private createEmbeddingForFile = async (
@@ -265,36 +352,70 @@ export class IndexingService {
         for (let i = 0; i < total; i += parallelCount) {
             if (this.stopping) break;
             const batch = files.slice(i, i + parallelCount);
+            processedCount = await this.processIndexBatch(
+                batch,
+                total,
+                processedCount,
+                notice,
+            );
+        }
+    };
 
-            const tasks = batch.map(async (file) => {
-                const result = await this.createEmbeddingForFile(file);
-                processedCount++;
-                this.updateNotice(notice, {
-                    total,
-                    processed: processedCount,
-                    currentFile: file.path,
-                });
-                return { file, result };
+    private processIndexBatch = async (
+        batch: readonly TFile[],
+        total: number,
+        processedCount: number,
+        notice: Notice,
+    ): Promise<number> => {
+        let currentCount = processedCount;
+        const tasks = batch.map(async (file) => {
+            const result = await this.createEmbeddingForFile(file);
+            currentCount++;
+            this.updateNotice(notice, {
+                total,
+                processed: currentCount,
+                currentFile: file.path,
             });
+            return { file, result };
+        });
 
-            const resultsWithFile = await Promise.all(tasks);
+        const partition = this.partitionBatchResults(await Promise.all(tasks));
+        await this.commitBatchPartition(partition);
+        return currentCount;
+    };
 
-            const validItems: VectorStoreBatchItem[] = [];
-            for (const { file, result } of resultsWithFile) {
-                if (result.ok) {
-                    if (result.value.chunks.length > 0) {
-                        validItems.push(result.value);
-                    }
-                } else {
-                    logger.errorLog(
-                        `Failed to process ${file.path}: ${result.error}`,
-                    );
-                }
+    private partitionBatchResults = (
+        resultsWithFile: readonly IndexedFileResult[],
+    ): BatchPartition => {
+        const validItems: VectorStoreBatchItem[] = [];
+        const emptyPaths: string[] = [];
+
+        for (const { file, result } of resultsWithFile) {
+            if (!result.ok) {
+                logger.errorLog(
+                    `Failed to process ${file.path}: ${result.error}`,
+                );
+                continue;
             }
 
-            if (validItems.length > 0) {
-                await this.vector.commitUpsertBatch(validItems);
+            if (result.value.chunks.length > 0) {
+                validItems.push(result.value);
+            } else {
+                emptyPaths.push(file.path);
             }
+        }
+
+        return { validItems, emptyPaths };
+    };
+
+    private commitBatchPartition = async (
+        partition: BatchPartition,
+    ): Promise<void> => {
+        if (partition.validItems.length > 0) {
+            await this.vector.commitUpsertBatch(partition.validItems);
+        }
+        if (partition.emptyPaths.length > 0) {
+            await this.vector.commitRemoveBatch(partition.emptyPaths);
         }
     };
 
@@ -313,6 +434,14 @@ export class IndexingService {
         title: string,
     ): Promise<Result<DocumentEmbeddingResult>> => {
         const settings = this.getSettings();
+        const modelName = settings.ollamaModel.trim();
+        if (modelName.length === 0) {
+            return {
+                ok: false,
+                error: 'No Ollama embedding model is selected.',
+            };
+        }
+
         const maxTokens = this.status.getState().modelContextLength || 512;
         let currentLimit = maxTokens;
         const maxRetries = settings.maxRetries || 5;
@@ -386,7 +515,9 @@ export class IndexingService {
         if (!result.ok) {
             return {
                 success: false,
-                reason: 'context_limit',
+                reason: this.isContextLimitError(result.error)
+                    ? 'context_limit'
+                    : 'other',
                 error: result.error,
             };
         }
@@ -419,7 +550,10 @@ export class IndexingService {
             };
         });
 
-        const average = await this.averageEmbeddings(vectors);
+        const average = await this.averageEmbeddings(
+            vectors,
+            settings.introWeight,
+        );
 
         return {
             success: true,
@@ -512,6 +646,18 @@ export class IndexingService {
         const pct = p.total > 0 ? Math.round((p.processed / p.total) * 100) : 0;
         notice.setMessage(
             `Indexing: ${pct}% (${p.processed}/${p.total})\n${p.currentFile}`,
+        );
+    };
+
+    private isContextLimitError = (message: string): boolean => {
+        const normalized = message.toLowerCase();
+        return (
+            normalized.includes('context') ||
+            normalized.includes('token') ||
+            normalized.includes('too long') ||
+            normalized.includes('maximum') ||
+            normalized.includes('exceed') ||
+            normalized.includes('truncate')
         );
     };
 }

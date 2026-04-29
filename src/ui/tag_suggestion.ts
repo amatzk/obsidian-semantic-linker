@@ -57,13 +57,14 @@ export class TagSuggest extends AbstractInputSuggest<string> {
         el.setText(`#${tag}`);
     }
 
-    selectSuggestion(tag: string): void {
+    selectSuggestion(tag: string, _evt: MouseEvent | KeyboardEvent): void {
         const fullValue = this.inputEl.value;
         const cursorPosition = this.inputEl.selectionStart || 0;
 
         const newValue = replaceLastWord(fullValue, cursorPosition, tag);
 
         this.inputEl.value = newValue;
+        this.inputEl.setSelectionRange(newValue.length, newValue.length);
         this.inputEl.trigger('input');
 
         this.close();

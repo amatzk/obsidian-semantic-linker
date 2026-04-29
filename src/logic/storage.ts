@@ -79,7 +79,11 @@ export const createStorageProvider = (config: DBConfig): RawStorage => {
 
     const getTransactionContext = async (
         mode: IDBTransactionMode,
-    ): Promise<{ tx: IDBTransaction; store: IDBObjectStore }> => {
+    ): Promise<{
+        db: IDBDatabase;
+        tx: IDBTransaction;
+        store: IDBObjectStore;
+    }> => {
         const db = await openDB();
         if (!db.objectStoreNames.contains(config.storeName)) {
             db.close();
@@ -89,26 +93,34 @@ export const createStorageProvider = (config: DBConfig): RawStorage => {
         }
         const tx = db.transaction(config.storeName, mode);
         const store = tx.objectStore(config.storeName);
-        return { tx, store };
+        return { db, tx, store };
     };
 
     const performRequest = async <T>(
         operation: (store: IDBObjectStore) => IDBRequest<T> | IDBRequest,
     ): Promise<T> => {
-        const { tx, store } = await getTransactionContext('readonly');
-        const request = operation(store);
-        const result = await promisify<T>(request as IDBRequest<T>);
+        const { db, tx, store } = await getTransactionContext('readonly');
+        try {
+            const request = operation(store);
+            const result = await promisify<T>(request as IDBRequest<T>);
 
-        await waitForTransaction(tx);
-        return result;
+            await waitForTransaction(tx);
+            return result;
+        } finally {
+            db.close();
+        }
     };
 
     const performVoid = async (
         operation: (store: IDBObjectStore) => void,
     ): Promise<void> => {
-        const { tx, store } = await getTransactionContext('readwrite');
-        operation(store);
-        await waitForTransaction(tx);
+        const { db, tx, store } = await getTransactionContext('readwrite');
+        try {
+            operation(store);
+            await waitForTransaction(tx);
+        } finally {
+            db.close();
+        }
     };
 
     return {
@@ -172,7 +184,11 @@ export const createStorageProvider = (config: DBConfig): RawStorage => {
                 }
             };
 
-            return waitForTransaction(tx);
+            try {
+                await waitForTransaction(tx);
+            } finally {
+                db.close();
+            }
         },
     };
 };

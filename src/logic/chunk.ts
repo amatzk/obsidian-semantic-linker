@@ -307,8 +307,9 @@ export const createChunks = async (
     const tokenizer = createTokenizer();
     const titlePrefix = title ? `Title: ${title}\nContent: ` : '';
 
-    const effectiveLimit = Math.floor(
-        (maxTokens - tokenizer.count(titlePrefix)) * safetyMargin,
+    const effectiveLimit = Math.max(
+        1,
+        Math.floor((maxTokens - tokenizer.count(titlePrefix)) * safetyMargin),
     );
 
     const config: ChunkConfig = {

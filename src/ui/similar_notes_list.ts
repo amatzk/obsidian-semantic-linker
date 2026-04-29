@@ -31,6 +31,22 @@ export const enableDrag = (el: HTMLElement, title: string): void => {
     });
 };
 
+const getDragLinkText = (
+    plugin: MainPlugin,
+    sourceFile: TFile,
+    targetPath: string,
+): string => {
+    const targetFile = plugin.app.vault.getAbstractFileByPath(targetPath);
+    if (targetFile instanceof TFile) {
+        return plugin.app.metadataCache.fileToLinktext(
+            targetFile,
+            sourceFile.path,
+            true,
+        );
+    }
+    return getTitleFromPath(targetPath);
+};
+
 export const animatePreview = (
     state: PreviewState,
     updateState?: (isOpen: boolean) => void,
@@ -79,7 +95,22 @@ export const renderEmptyState = (
         cls: 'text-center p-5 text-[var(--text-muted)]',
     });
 
-    empty.createDiv({ text: 'No similar notes found.' });
+    const isIndexed =
+        plugin.vectorStoreService.getState().entries[file.path] !== undefined;
+
+    empty.createDiv({
+        text: isIndexed
+            ? 'No similar notes found.'
+            : 'This note has not been analyzed yet.',
+    });
+
+    if (isIndexed) {
+        empty.createDiv({
+            text: 'Try lowering the threshold or indexing more notes.',
+            cls: 'mt-1 text-xs',
+        });
+        return;
+    }
 
     const btn = empty.createEl('button', {
         text: 'Analyze this note',
@@ -96,6 +127,7 @@ const renderItemHeader = (
     title: string,
     path: string,
     similarity: number,
+    startLine: number | undefined,
     plugin: MainPlugin,
 ): HTMLElement => {
     const header = container.createDiv({
@@ -123,7 +155,7 @@ const renderItemHeader = (
         if (!(file instanceof TFile)) {
             return;
         }
-        const { newLeaf, state } = createOpenState(e);
+        const { newLeaf, state } = createOpenState(e, startLine);
         void plugin.app.workspace.getLeaf(newLeaf).openFile(file, state);
     };
 
@@ -160,7 +192,7 @@ const renderItemPreview = (
         void (async () => {
             const nextState = !isOpen;
 
-            if (nextState && previewEl.innerText === '') {
+            if (nextState && previewEl.textContent === '') {
                 previewEl.setText('Loading...');
                 try {
                     const file = plugin.app.vault.getAbstractFileByPath(path);
@@ -172,7 +204,7 @@ const renderItemPreview = (
                             0,
                             plugin.settings.previewLength,
                         );
-                        previewEl.setText(text);
+                        previewEl.setText(text || 'No preview available.');
                     }
                 } catch {
                     previewEl.setText('Failed to load preview.');
@@ -186,6 +218,7 @@ const renderItemPreview = (
 export const renderResultItem = (
     container: HTMLElement,
     result: SemanticSearchResult,
+    sourceFile: TFile,
     plugin: MainPlugin,
 ): void => {
     const item = container.createDiv({
@@ -199,11 +232,12 @@ export const renderResultItem = (
         title,
         result.path,
         result.similarity,
+        result.startLine,
         plugin,
     );
     renderItemPreview(item, toggleBtn, result.path, plugin);
 
-    enableDrag(item, title);
+    enableDrag(item, getDragLinkText(plugin, sourceFile, result.path));
 };
 
 export const renderSimilarNotesList = (
@@ -219,6 +253,6 @@ export const renderSimilarNotesList = (
 
     const list = container.createDiv({ cls: 'flex-grow overflow-y-auto' });
     for (const result of results) {
-        renderResultItem(list, result, plugin);
+        renderResultItem(list, result, file, plugin);
     }
 };

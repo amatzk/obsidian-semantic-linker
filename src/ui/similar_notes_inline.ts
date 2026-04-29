@@ -14,6 +14,8 @@ export class SimilarNotesInlineView extends Component {
     private paddingObserver: MutationObserver | null = null;
     private readingViewObserver: MutationObserver | null = null;
     private editingViewObserver: MutationObserver | null = null;
+    private cmContentEl: HTMLElement | null = null;
+    private originalCmPaddingBottom = '';
 
     constructor(
         private readonly view: MarkdownView,
@@ -52,6 +54,7 @@ export class SimilarNotesInlineView extends Component {
         this.disconnectReadingViewObserver();
         this.disconnectEditingViewObserver();
         this.disconnectPaddingObserver();
+        this.restoreEditorPadding();
         this.readingContainerEl.remove();
         this.editingContainerEl.remove();
     }
@@ -167,6 +170,12 @@ export class SimilarNotesInlineView extends Component {
             return;
         }
 
+        if (this.cmContentEl !== cmContent) {
+            this.restoreEditorPadding();
+            this.cmContentEl = cmContent;
+            this.originalCmPaddingBottom = cmContent.style.paddingBottom;
+        }
+
         this.paddingObserver = new MutationObserver((mutations) => {
             for (const mutation of mutations) {
                 if (
@@ -193,11 +202,25 @@ export class SimilarNotesInlineView extends Component {
         }
     };
 
+    private restoreEditorPadding = (): void => {
+        if (!this.cmContentEl) return;
+
+        if (this.originalCmPaddingBottom) {
+            this.cmContentEl.setCssProps({
+                'padding-bottom': this.originalCmPaddingBottom,
+            });
+        } else {
+            this.cmContentEl.style.removeProperty('padding-bottom');
+        }
+
+        this.cmContentEl = null;
+        this.originalCmPaddingBottom = '';
+    };
+
     private syncPadding = (cmContent: HTMLElement): void => {
         const paddingBottom = cmContent.style.paddingBottom;
         if (paddingBottom && paddingBottom !== '0px') {
             this.editingContainerEl.style.paddingBottom = paddingBottom;
-            // eslint-disable-next-line obsidianmd/no-static-styles-assignment
             cmContent.setCssProps({ 'padding-bottom': '0px' });
         }
     };
@@ -256,6 +279,8 @@ export class SimilarNotesInlineView extends Component {
         const header = container.createDiv({
             cls: 'flex items-center gap-2 mb-3 cursor-pointer py-1',
         });
+        header.setAttr('role', 'button');
+        header.setAttr('tabindex', '0');
 
         const toggleIcon = header.createDiv({
             cls: 'flex items-center justify-center w-6 h-6 shrink-0 transition-transform duration-200',
@@ -279,7 +304,7 @@ export class SimilarNotesInlineView extends Component {
             cls: this.isCollapsed ? 'hidden' : 'block',
         });
 
-        header.onclick = () => {
+        const toggle = () => {
             this.isCollapsed = !this.isCollapsed;
             if (this.isCollapsed) {
                 resultsContainer.removeClass('block');
@@ -292,6 +317,14 @@ export class SimilarNotesInlineView extends Component {
                 toggleIcon,
                 this.isCollapsed ? 'chevron-right' : 'chevron-down',
             );
+        };
+
+        header.onclick = toggle;
+        header.onkeydown = (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                toggle();
+            }
         };
 
         return { resultsContainer };
