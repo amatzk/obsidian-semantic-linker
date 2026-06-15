@@ -64,7 +64,7 @@ export default class MainPlugin extends Plugin {
         this.registerInlineViews();
 
         this.addSettingTab(new SemanticLinkerSettingTab(this.app, this));
-        this.addRibbonIcon('sparkles', 'Semantic linker search', () =>
+        this.addRibbonIcon('sparkles', 'SemVink search', () =>
             new SemanticSearchModal(this.app, this).open(),
         );
     }

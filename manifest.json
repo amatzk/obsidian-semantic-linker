@@ -1,6 +1,6 @@
 {
     "id": "semvink",
-    "name": "Semantic Linker",
+    "name": "SemVink",
     "version": "0.0.4",
     "minAppVersion": "1.12.3",
     "description": "Find semantically similar notes using Ollama. fully offline semantic search.",

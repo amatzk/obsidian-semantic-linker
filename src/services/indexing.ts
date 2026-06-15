@@ -293,7 +293,7 @@ export class IndexingService {
         if (this.getSettings().ollamaModel.trim().length === 0) {
             return {
                 ok: false,
-                error: 'Select an Ollama embedding model in Semantic Linker settings.',
+                error: 'Select an Ollama embedding model in SemVink settings.',
             };
         }
 

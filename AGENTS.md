@@ -1,4 +1,4 @@
-# Obsidian Semantic Linker - Agent Guidelines
+# Obsidian SemVink - Agent Guidelines
 
 ## Project Overview
 - Target: Obsidian Community Plugin (TypeScript → bundled JavaScript).

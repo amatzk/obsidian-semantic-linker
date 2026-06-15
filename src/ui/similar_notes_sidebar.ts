@@ -18,7 +18,7 @@ export class SimilarNotesSidebarView extends ItemView {
     }
 
     getDisplayText(): string {
-        return 'Semantic linker';
+        return 'SemVink';
     }
 
     async onOpen() {

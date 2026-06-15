@@ -1,6 +1,6 @@
 import { Notice } from 'obsidian';
 
-const PREFIX = 'Semantic Linker';
+const PREFIX = 'SemVink';
 
 export const logger = {
     _notify: (msg: string, isError = false, timeout = 4000) => {

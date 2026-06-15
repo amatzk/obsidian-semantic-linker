@@ -1,5 +1,5 @@
 
-# Obsidian Semantic Linker
+# Obsidian SemVink
 
 Obsidian plugin for semantic search and discovering similar notes using Ollama.
 
@@ -27,7 +27,7 @@ Obsidian plugin for semantic search and discovering similar notes using Ollama.
 
 1. Configure Ollama URL and model in plugin settings
 2. Run command: "Run Full Indexing"
-3. Open sidebar with sparkles icon or use "Semantic Linker" command
+3. Open sidebar with sparkles icon or use "SemVink" command
 
 ## Development
 

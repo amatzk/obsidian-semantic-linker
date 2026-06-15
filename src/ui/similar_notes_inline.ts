@@ -291,7 +291,7 @@ export class SimilarNotesInlineView extends Component {
         );
 
         header.createDiv({
-            text: 'Semantic linker',
+            text: 'SemVink',
             cls: 'text-sm font-medium text-[var(--text-normal)] m-0',
         });
 
