@@ -65,7 +65,7 @@ export class SimilarNotesInlineView extends Component {
     } => {
         const container = createDiv();
         container.addClasses([
-            'semantic-linker-inline-container',
+            'semvink-inline-container',
             'border-t',
             'border-[var(--background-modifier-border)]',
             'my-4',
@@ -75,7 +75,7 @@ export class SimilarNotesInlineView extends Component {
         ]);
 
         const content = container.createDiv({
-            cls: 'semantic-linker-inline-content',
+            cls: 'semvink-inline-content',
         });
 
         return { container, content };

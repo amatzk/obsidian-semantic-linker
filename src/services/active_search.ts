@@ -4,7 +4,7 @@ import { searchSimilar } from '../logic/similarity_search';
 import type MainPlugin from '../main';
 import type { SemanticSearchResult } from '../types';
 
-export const EVENT_RESULTS_UPDATED = 'semantic-linker:results-updated';
+export const EVENT_RESULTS_UPDATED = 'semvink:results-updated';
 
 type ActiveSearchState = {
     readonly file: TFile | null;

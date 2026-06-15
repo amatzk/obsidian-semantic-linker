@@ -20,7 +20,7 @@ Obsidian plugin for semantic search and discovering similar notes using Ollama.
 ### Plugin Installation
 
 1. Download `main.js`, `manifest.json`, `styles.css` from releases
-2. Copy to `<vault>/.obsidian/plugins/semantic-linker/`
+2. Copy to `<vault>/.obsidian/plugins/semvink/`
 3. Enable in Obsidian settings
 
 ## Usage

@@ -1,5 +1,5 @@
 {
-    "name": "semantic-linker",
+    "name": "semvink",
     "version": "0.0.4",
     "description": "Semantic Linker for Obsidian (https://obsidian.md)",
     "main": "main.js",

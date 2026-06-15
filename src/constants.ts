@@ -1,6 +1,6 @@
 import type { SettingParams } from './types';
 
-export const DB_PREFIX = 'obsidian-semantic-linker';
+export const DB_PREFIX = 'obsidian-semvink';
 export const DB_VERSION = 2;
 
 export const DEFAULT_SETTINGS: SettingParams = {
@@ -26,6 +26,6 @@ export const DEFAULT_SETTINGS: SettingParams = {
     similaritySearchMode: 'average-pooling',
 };
 
-export const VIEW_TYPE_SEMANTIC_LINKER = 'semantic-linker-view';
+export const VIEW_TYPE_SEMANTIC_LINKER = 'semvink-view';
 
-export const EVENT_REFRESH_VIEWS = 'semantic-linker:refresh-views';
+export const EVENT_REFRESH_VIEWS = 'semvink:refresh-views';
